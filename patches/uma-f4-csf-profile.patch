@@ -166,7 +166,7 @@
        result = kbase_renew_tiler_heap(queue);
        if (result != VK_SUCCESS)
           return vk_queue_set_lost(&queue->vk,
-                                  "kbase: tiler heap renewal failed");
+                                   "kbase: tiler heap renewal failed");
 +      if (f4) {
 +         f4_renew_ns = os_time_get_nano() - f4_renew_begin;
 +         f4_renewed = true;
