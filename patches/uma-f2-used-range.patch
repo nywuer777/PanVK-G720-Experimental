@@ -1,0 +1,66 @@
+--- a/src/panfrost/vulkan/panvk_priv_bo.h
++++ b/src/panfrost/vulkan/panvk_priv_bo.h
+@@ -19,6 +19,9 @@
+    uint64_t refcnt;
+    struct panvk_device *dev;
+    struct pan_kmod_bo *bo;
++   /* UMA F2: high-water mark of data allocated within this internal BO.
++    * This is reset when a BO leaves the idle cache for a new pool lifetime. */
++   size_t pool_used_size;
+    struct {
+       uint64_t dev;
+       void *host;
+--- a/src/panfrost/vulkan/panvk_mempool.c
++++ b/src/panfrost/vulkan/panvk_mempool.c
+@@ -98,6 +98,10 @@
+    if (bo == NULL)
+       return NULL;
+ 
++   /* UMA F2: an idle BO may contain old allocations, but none belong to
++    * this command buffer. Record only ranges allocated in its new lifetime. */
++   bo->pool_used_size = 0;
++
+    if (pool->props.owns_bos) {
+       if (pan_kmod_bo_size(bo->bo) == pool->base.slab_size)
+          list_addtail(&bo->node, &pool->bos);
+@@ -154,6 +158,14 @@
+    if (unlikely(bo == NULL || offset + info.size > pan_kmod_bo_size(bo->bo))) {
+       bo = panvk_pool_alloc_backing(pool, info.size);
+       offset = 0;
++   }
++
++   if (bo != NULL) {
++      /* For owned pools, the high-water mark includes alignment padding.
++       * Keep the maximum even when subsequent allocations target an older
++       * transient slab after taking a big dedicated allocation. */
++      const size_t used_end = (size_t)offset + info.size;
++      bo->pool_used_size = MAX2(bo->pool_used_size, used_end);
+    }
+ 
+    if (bo != NULL && pool->transient_bo == bo) {
+@@ -313,11 +325,20 @@
+    if (!(pool->props.create_flags & PAN_KMOD_BO_FLAG_WB_MMAP))
+       return;
+ 
+-   list_for_each_entry(struct panvk_priv_bo, bo, &pool->bos, node)
+-      panvk_priv_bo_flush(bo, 0, bo->bo->size);
+-
+-   list_for_each_entry(struct panvk_priv_bo, bo, &pool->big_bos, node)
+-      panvk_priv_bo_flush(bo, 0, bo->bo->size);
++   /* UMA F2: flush only the allocated prefix of each internal BO, not
++    * the entire BO capacity. This preserves synchronization of every
++    * descriptor/command byte that may have been CPU-written, while avoiding
++    * pointless cache work on unused slabs and oversized best-fit BOs.
++    * We deliberately leave GPU->CPU invalidation unchanged. */
++   list_for_each_entry(struct panvk_priv_bo, bo, &pool->bos, node) {
++      if (bo->pool_used_size)
++         panvk_priv_bo_flush(bo, 0, bo->pool_used_size);
++   }
++
++   list_for_each_entry(struct panvk_priv_bo, bo, &pool->big_bos, node) {
++      if (bo->pool_used_size)
++         panvk_priv_bo_flush(bo, 0, bo->pool_used_size);
++   }
+ }
+ 
+ void
