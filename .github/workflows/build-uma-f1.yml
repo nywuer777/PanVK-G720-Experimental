@@ -1,0 +1,136 @@
+name: PanVK G720 UMA F1 — Android ARM64
+
+on:
+  push:
+    branches:
+      - exp/uma-inteligente-fase1
+    paths:
+      - "vendor/PanVK-G720-UMA-F1-source.zip"
+      - ".github/workflows/build-uma-f1.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+
+      - name: Verify supplied source archive
+        run: |
+          set -euo pipefail
+          test -s vendor/PanVK-G720-UMA-F1-source.zip
+          echo "c0f343adcfdb6779df5642f4252308baed2c7e8b462181af79864c7471023d4a  vendor/PanVK-G720-UMA-F1-source.zip" | sha256sum --check
+          mkdir -p mesa
+          unzip -q vendor/PanVK-G720-UMA-F1-source.zip -d mesa
+          python3 - <<'PY'
+          from pathlib import Path
+          source=Path("mesa")
+          mem=(source/"src/panfrost/vulkan/panvk_mempool.c").read_text()
+          queue=(source/"src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
+          assert "panvk_uma_big_bo_budget" in mem
+          assert "panvk_uma_better_fit" in mem
+          assert "#define KBASE_RINGBUF_SIZE     (1024 * 1024)" in queue
+          assert "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256" in queue
+          assert (source/"src/panfrost/vulkan/panvk_uma_policy.h").is_file()
+          print("Verified: UMA F1 + E20 performance source configuration")
+          PY
+
+      - name: Set up Python and Android SDK/NDK
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android NDK
+        run: |
+          set -euo pipefail
+          sdkmanager --install "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Install Linux build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential gettext-base pkg-config             libelf-dev spirv-tools bison flex libdrm-dev             libx11-dev libxext-dev libxcb1-dev libx11-xcb-dev             llvm-20-dev libclang-20-dev libclc-20-dev libllvmspirvlib-20-dev
+          python -m pip install --upgrade pip
+          python -m pip install mako PyYAML "meson>=1.4" ninja packaging
+
+      - name: Build Panfrost host-side compiler tools
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          meson setup build-host             -Dplatforms=[] -Dgallium-drivers=[] -Dvulkan-drivers=[]             -Dtools=panfrost -Dprecomp-compiler=enabled             -Dinstall-precomp-compiler=true -Dllvm=enabled             -Dmesa-clc=enabled -Dinstall-mesa-clc=true
+          ninja -C build-host src/compiler/clc/mesa_clc             src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile
+          ln -sf mesa_clc build-host/src/compiler/clc/mesa-clc
+          ln -sf vtn_bindgen2 build-host/src/compiler/spirv/vtn-bindgen2
+          echo "$GITHUB_WORKSPACE/mesa/build-host/src/compiler/clc" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/mesa/build-host/src/compiler/spirv" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/mesa/build-host/src/panfrost/clc" >> "$GITHUB_PATH"
+
+      - name: Configure Android AArch64
+        working-directory: mesa
+        env:
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/mesa/shims
+        run: |
+          set -euo pipefail
+          export MESON_WORKING_DIR="$PWD"
+          envsubst < android.toml > android-cross.txt
+          sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
+          meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android,x11             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase,panthor
+
+      - name: Compile PanVK G720 UMA F1
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          meson compile -C build
+
+      - name: Validate and package for Bachata
+        run: |
+          set -euo pipefail
+          SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
+          test -s "$SO"
+          readelf -h "$SO" | grep -q AArch64
+          mkdir -p dist
+          cp "$SO" dist/libvulkan_panfrost.so
+          python3 - <<'PY'
+          import hashlib,json,pathlib,zipfile
+          out=pathlib.Path("dist")
+          binary=out/"libvulkan_panfrost.so"
+          sha=hashlib.sha256(binary.read_bytes()).hexdigest()
+          meta={
+            "schemaVersion":1,
+            "author":"PanVK G720 Experimental",
+            "description":"UMA Fase 1 source build from beta.2 + E20 performance parity. Experimental and not hardware verified.",
+            "driverVersion":"PanVK G720 beta.2 UMA-F1",
+            "libraryName":"libvulkan_panfrost.so",
+            "minApi":35,
+            "name":"PanVK G720 UMA Inteligente Fase 1",
+            "packageVersion":"0.1.0-beta.2.uma-f1",
+            "sanitizedArtifactSha256":sha,
+            "vendor":"Mesa"
+          }
+          (out/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n")
+          archive=out/"PanVK-G720-UMA-F1-Android-ARM64.zip"
+          with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+            for f in ("libvulkan_panfrost.so","meta.json"):
+              z.write(out/f,f)
+          with zipfile.ZipFile(archive) as z:
+            assert z.testzip() is None
+            assert set(z.namelist())=={"libvulkan_panfrost.so","meta.json"}
+          print("binary sha256:",sha)
+          print("zip sha256:",hashlib.sha256(archive.read_bytes()).hexdigest())
+          PY
+
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PanVK-G720-UMA-F1-Android-ARM64
+          path: dist/PanVK-G720-UMA-F1-Android-ARM64.zip
+          if-no-files-found: error
