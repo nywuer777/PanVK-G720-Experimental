@@ -1,0 +1,200 @@
+--- a/src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c
++++ b/src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c
+@@ -82,6 +82,74 @@
+ #define KBASE_TILER_HEAP_RENEW_WORK 0
+ 
+ #define KBASE_GPU_WAIT_MAX 3
++
++/* UMA F4-DIAG: this variant is instrumentation ONLY. No changes to GPU
++ * synchronization, firmware ring contents or the heap renewal schedule.
++ * Each submission records sampled CPU wall time in coarse intervals.
++ * PANVK_G720_F4_PROFILE=0 disables profiling; enabled by default only for
++ * this dedicated diagnostics build. Times cannot measure GPU busy time.
++ */
++struct panvk_f4_profile {
++   uint64_t submits;
++   uint64_t total_ns;
++   uint64_t cpu_wait_ns;
++   uint64_t map_sync_ns;
++   uint64_t emit_ns;
++   uint64_t publish_ns;
++   uint64_t force_wait_ns;
++   uint64_t renew_wait_ns;
++   uint64_t renew_ns;
++   uint64_t ring_wait_ns;
++   uint64_t max_submit_ns;
++   uint64_t max_ring_wait_ns;
++   uint64_t ring_stalls;
++   uint64_t cpu_wait_submits;
++   uint64_t gpu_wait_submits;
++   uint64_t forced_submits;
++   uint64_t heap_renewals;
++};
++
++static _Thread_local struct panvk_f4_profile panvk_f4_stats;
++
++static bool
++panvk_f4_enabled(void)
++{
++   /* Per-thread cache avoids a static initialization race in vkQueueSubmit. */
++   static _Thread_local int enabled = -1;
++   if (enabled < 0)
++      enabled = debug_get_bool_option("PANVK_G720_F4_PROFILE", true);
++   return enabled != 0;
++}
++
++static inline uint64_t
++panvk_f4_elapsed(uint64_t *mark)
++{
++   uint64_t now = os_time_get_nano();
++   uint64_t delta = now >= *mark ? now - *mark : 0;
++   *mark = now;
++   return delta;
++}
++
++static void
++panvk_f4_snapshot(void)
++{
++   struct panvk_f4_profile *p = &panvk_f4_stats;
++   mesa_logi("PANVK-F4 submits=%" PRIu64 " total_ns=%" PRIu64
++             " cpu_wait_ns=%" PRIu64 " map_sync_ns=%" PRIu64
++             " emit_ns=%" PRIu64 " publish_ns=%" PRIu64
++             " forced_wait_ns=%" PRIu64 " renew_wait_ns=%" PRIu64
++             " renew_ns=%" PRIu64 " ring_wait_ns=%" PRIu64
++             " max_submit_ns=%" PRIu64 " max_ring_wait_ns=%" PRIu64
++             " ring_stalls=%" PRIu64 " cpu_wait_submits=%" PRIu64
++             " gpu_wait_submits=%" PRIu64 " forced_submits=%" PRIu64
++             " heap_renewals=%" PRIu64,
++             p->submits, p->total_ns, p->cpu_wait_ns, p->map_sync_ns,
++             p->emit_ns, p->publish_ns, p->force_wait_ns, p->renew_wait_ns,
++             p->renew_ns, p->ring_wait_ns, p->max_submit_ns,
++             p->max_ring_wait_ns, p->ring_stalls, p->cpu_wait_submits,
++             p->gpu_wait_submits, p->forced_submits, p->heap_renewals);
++   *p = (struct panvk_f4_profile){0};
++}
+ 
+ struct kbase_gpu_wait {
+    uint64_t addr;
+@@ -455,9 +523,18 @@
+    if (subq->kbase.insert - extract + required <= KBASE_RINGBUF_SIZE)
+       return VK_SUCCESS;
+ 
++   const bool f4 = panvk_f4_enabled();
++   const uint64_t f4_ring_begin = f4 ? os_time_get_nano() : 0;
+    VkResult result = kbase_subqueue_wait_seqno(
+       queue, subqueue, subq->kbase.emitted_jobs, BITFIELD_BIT(subqueue),
+       false, UINT64_MAX);
++   if (f4) {
++      uint64_t elapsed = os_time_get_nano() - f4_ring_begin;
++      struct panvk_f4_profile *p = &panvk_f4_stats;
++      p->ring_stalls++;
++      p->ring_wait_ns += elapsed;
++      p->max_ring_wait_ns = MAX2(p->max_ring_wait_ns, elapsed);
++   }
+    if (result != VK_SUCCESS)
+       return result;
+ 
+@@ -2815,6 +2892,14 @@
+    struct panvk_gpu_queue *queue = submit->queue;
+    VkResult result;
+ 
++   const bool f4 = panvk_f4_enabled();
++   const uint64_t f4_start = f4 ? os_time_get_nano() : 0;
++   uint64_t f4_mark = f4_start;
++   uint64_t f4_cpu_wait_ns = 0, f4_map_sync_ns = 0, f4_emit_ns = 0;
++   uint64_t f4_publish_ns = 0, f4_force_wait_ns = 0;
++   uint64_t f4_renew_wait_ns = 0, f4_renew_ns = 0;
++   bool f4_renewed = false;
++
+    // struct pandecode_context *decode_ctx = submit->dev->debug.decode_ctx;
+    // const struct pan_kmod_dev_props *props =
+    //    &submit->phys_dev->kmod.dev->props;
+@@ -2849,11 +2934,16 @@
+          return result;
+    }
+ 
++   if (f4)
++      f4_cpu_wait_ns = panvk_f4_elapsed(&f4_mark);
++
+    /* E09: remove only the repetitive informational log. */
+ 
+    /* Flush pending synchronization requests before submitting the job, to
+     * make sure things are GPU-visible. */
+    pan_kmod_flush_bo_map_syncs(dev->kmod.dev);
++   if (f4)
++      f4_map_sync_ns = panvk_f4_elapsed(&f4_mark);
+ 
+    uint32_t touched = 0;
+    uint32_t gpu_wait_emitted_mask = 0;
+@@ -2884,8 +2974,12 @@
+       touched |= BITFIELD_BIT(qsubmit->queue_index);
+    }
+ 
++   if (f4)
++      f4_emit_ns = panvk_f4_elapsed(&f4_mark);
+    u_foreach_bit(i, touched)
+       kbase_subqueue_publish(queue, i);
++   if (f4)
++      f4_publish_ns = panvk_f4_elapsed(&f4_mark);
+ 
+    for (uint32_t i = 0; i < PANVK_SUBQUEUE_COUNT; i++)
+       submit->kbase_target_seqnos[i] = queue->subqueues[i].kbase.emitted_jobs;
+@@ -2895,6 +2989,8 @@
+                                        UINT64_MAX);
+       if (result != VK_SUCCESS)
+          return result;
++      if (f4)
++         f4_force_wait_ns = panvk_f4_elapsed(&f4_mark);
+    }
+ 
+    const uint32_t graphics_mask =
+@@ -2921,18 +3017,48 @@
+       /* Heap generations are referenced only by graphics streams.  Preserve
+        * overlap with unrelated compute work instead of draining every
+        * subqueue before replacing the tiler heap. */
++      /* Exclude inexpensive renewal-count bookkeeping from the wait bucket. */
++      uint64_t f4_renew_begin = f4 ? os_time_get_nano() : 0;
+       result = kbase_wait_graphics_targets(
+          queue, submit->kbase_target_seqnos, UINT64_MAX);
+       if (result != VK_SUCCESS)
+          return result;
+-
++      if (f4)
++         f4_renew_wait_ns = os_time_get_nano() - f4_renew_begin;
++
++      f4_renew_begin = f4 ? os_time_get_nano() : 0;
+       result = kbase_renew_tiler_heap(queue);
+       if (result != VK_SUCCESS)
+          return vk_queue_set_lost(&queue->vk,
+                                  "kbase: tiler heap renewal failed");
++      if (f4) {
++         f4_renew_ns = os_time_get_nano() - f4_renew_begin;
++         f4_renewed = true;
++      }
+ 
+       queue->kbase_tiler_submit_count = 0;
+       queue->kbase_tiler_work_count = 0;
++   }
++
++   if (f4) {
++      const uint64_t wall_ns = os_time_get_nano() - f4_start;
++      struct panvk_f4_profile *p = &panvk_f4_stats;
++      p->submits++;
++      p->total_ns += wall_ns;
++      p->max_submit_ns = MAX2(p->max_submit_ns, wall_ns);
++      p->cpu_wait_ns += f4_cpu_wait_ns;
++      p->map_sync_ns += f4_map_sync_ns;
++      p->emit_ns += f4_emit_ns;
++      p->publish_ns += f4_publish_ns;
++      p->force_wait_ns += f4_force_wait_ns;
++      p->renew_wait_ns += f4_renew_wait_ns;
++      p->renew_ns += f4_renew_ns;
++      p->cpu_wait_submits += vk_submit->wait_count && !native_gpu_waits;
++      p->gpu_wait_submits += native_gpu_waits;
++      p->forced_submits += submit->force_sync;
++      p->heap_renewals += f4_renewed;
++      if (p->submits >= 256)
++         panvk_f4_snapshot();
+    }
+ 
+    return VK_SUCCESS;
