@@ -108,7 +108,17 @@ jobs:
           export MESON_WORKING_DIR="$PWD"
           envsubst < android.toml > android-cross.txt
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
-          meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android,x11             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase,panthor
+          # The Android kbase backend does not use Linux KMS/DRM.
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("meson.build")
+          source=p.read_text()
+          old="system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly', 'linux', 'sunos', 'android', 'managarm'].contains(host_machine.system())"
+          assert source.count(old)==1, "Mesa DRM detection changed"
+          source=source.replace(old,old+"\nif host_machine.system() == 'android' and get_option('panfrost-kmds') == ['kbase']\n  system_has_kms_drm = false\nendif")
+          p.write_text(source)
+          PY
+          meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
 
       - name: Compile PanVK G720 UMA F1
         working-directory: mesa
@@ -122,6 +132,9 @@ jobs:
           SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
           test -s "$SO"
           readelf -h "$SO" | grep -q AArch64
+          # Reject incompatible host-OS dependencies before releasing.
+          ! readelf -d "$SO" | grep -Eq 'libdrm|libxcb|libX11|libxshmfence'
+          ! readelf -d "$SO" | grep -q '(RUNPATH)'
           mkdir -p dist
           cp "$SO" dist/libvulkan_panfrost.so
           python3 - <<'PY'
