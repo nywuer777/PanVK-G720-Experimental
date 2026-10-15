@@ -16,7 +16,7 @@ FIELDS = (
 ).split()
 BUCKETS = ["cpu_wait_ns", "map_sync_ns", "emit_ns", "publish_ns",
            "forced_wait_ns", "renew_wait_ns", "renew_ns"]
-PATTERN = re.compile(r"\\bPANVK-F4\\s+(.*)")
+PATTERN = re.compile(r"\bPANVK-F4\s+(.*)")
 PAIR = re.compile(r"([a-z_]+)=([0-9]+)")
 
 
