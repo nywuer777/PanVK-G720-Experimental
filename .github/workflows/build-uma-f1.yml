@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y build-essential gettext-base pkg-config             libelf-dev spirv-tools bison flex libdrm-dev             libx11-dev libxext-dev libxcb1-dev libx11-xcb-dev             llvm-20-dev libclang-20-dev libclc-20-dev libllvmspirvlib-20-dev
+          sudo apt-get install -y build-essential gettext-base pkg-config patchelf             libelf-dev spirv-tools bison flex libdrm-dev             libx11-dev libxext-dev libxcb1-dev libx11-xcb-dev             llvm-20-dev libclang-20-dev libclc-20-dev libllvmspirvlib-20-dev
           python -m pip install --upgrade pip
           python -m pip install mako PyYAML "meson>=1.4" ninja packaging
 
@@ -99,6 +99,26 @@ jobs:
           echo "$GITHUB_WORKSPACE/mesa/build-host/src/compiler/spirv" >> "$GITHUB_PATH"
           echo "$GITHUB_WORKSPACE/mesa/build-host/src/panfrost/clc" >> "$GITHUB_PATH"
 
+      - name: Cross-build static libdrm for Android kbase
+        working-directory: mesa
+        env:
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/mesa/shims
+        run: |
+          set -euo pipefail
+          export MESON_WORKING_DIR="$PWD"
+          envsubst < android.toml > android-cross.txt
+          curl --retry 5 --retry-all-errors --retry-delay 4 -fL -o libdrm-2.4.133.tar.xz "https://dri.freedesktop.org/libdrm/libdrm-2.4.133.tar.xz"
+          echo "fc68f9d0ba2ea63c9432a299e14fea09fad7a8a66e8039fcd7802ca59f77b4f5  libdrm-2.4.133.tar.xz" | sha256sum -c -
+          tar -xf libdrm-2.4.133.tar.xz
+          meson setup libdrm-build libdrm-2.4.133 --cross-file android-cross.txt \
+            -Dbuildtype=release -Ddefault_library=static
+          meson compile -C libdrm-build
+          LIBDRM_ARCHIVE="$(find libdrm-build -name 'libdrm.a' -type f | head -1)"
+          test -n "$LIBDRM_ARCHIVE"
+          cp "$LIBDRM_ARCHIVE" shims/libdrm.a
+          rm shims/libdrm.so
+          test -s shims/libdrm.a
+
       - name: Configure Android AArch64
         working-directory: mesa
         env:
@@ -108,16 +128,6 @@ jobs:
           export MESON_WORKING_DIR="$PWD"
           envsubst < android.toml > android-cross.txt
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
-          # The Android kbase backend does not use Linux KMS/DRM.
-          python3 - <<'PY'
-          from pathlib import Path
-          p=Path("meson.build")
-          source=p.read_text()
-          old="system_has_kms_drm = ['openbsd', 'netbsd', 'freebsd', 'gnu/kfreebsd', 'dragonfly', 'linux', 'sunos', 'android', 'managarm'].contains(host_machine.system())"
-          assert source.count(old)==1, "Mesa DRM detection changed"
-          source=source.replace(old,old+"\nif host_machine.system() == 'android' and get_option('panfrost-kmds') == ['kbase']\n  system_has_kms_drm = false\nendif")
-          p.write_text(source)
-          PY
           meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
 
       - name: Compile PanVK G720 UMA F1
@@ -132,6 +142,7 @@ jobs:
           SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
           test -s "$SO"
           readelf -h "$SO" | grep -q AArch64
+          patchelf --remove-rpath "$SO"
           # Reject incompatible host-OS dependencies before releasing.
           ! readelf -d "$SO" | grep -Eq 'libdrm|libxcb|libX11|libxshmfence'
           ! readelf -d "$SO" | grep -q '(RUNPATH)'
