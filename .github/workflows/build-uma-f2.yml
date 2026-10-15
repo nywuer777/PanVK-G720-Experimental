@@ -1,0 +1,204 @@
+name: PanVK G720 UMA F2 — Android ARM64
+
+on:
+  push:
+    branches:
+      - exp/uma-inteligente-fase2
+    paths:
+      - "vendor/PanVK-G720-UMA-F1-source.zip"
+      - "patches/uma-f2-used-range.patch"
+      - ".github/workflows/build-uma-f2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout experimental branch
+        uses: actions/checkout@v4
+
+      - name: Verify supplied source archive
+        run: |
+          set -euo pipefail
+          test -s vendor/PanVK-G720-UMA-F1-source.zip
+          echo "c0f343adcfdb6779df5642f4252308baed2c7e8b462181af79864c7471023d4a  vendor/PanVK-G720-UMA-F1-source.zip" | sha256sum --check
+          mkdir -p mesa
+          unzip -q vendor/PanVK-G720-UMA-F1-source.zip -d mesa
+          python3 - <<'PY'
+          from pathlib import Path
+          source=Path("mesa")
+          # The slim ZIP serializes this symlink as a text placeholder.
+          # Restore the original relative symlink before compiling Android stubs.
+          sync=source/"include/android_stub/sync/sync.h"
+          if sync.is_file() and not sync.is_symlink():
+              assert sync.read_text().strip()=="../android/sync.h", "Unexpected sync header content"
+              sync.unlink()
+              sync.symlink_to("../android/sync.h")
+          assert sync.resolve().is_file(), "Missing Android sync header"
+          x11=source/"shims/libx11-xcb.so"
+          if x11.is_file() and not x11.is_symlink():
+              assert x11.read_text().strip()=="libX11-xcb.so", "Unexpected X11 shim content"
+              x11.unlink()
+              x11.symlink_to("libX11-xcb.so")
+          assert x11.resolve().is_file(), "Missing X11 library shim"
+          mem=(source/"src/panfrost/vulkan/panvk_mempool.c").read_text()
+          queue=(source/"src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
+          assert "panvk_uma_big_bo_budget" in mem
+          assert "panvk_uma_better_fit" in mem
+          assert "#define KBASE_RINGBUF_SIZE     (1024 * 1024)" in queue
+          assert "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256" in queue
+          assert (source/"src/panfrost/vulkan/panvk_uma_policy.h").is_file()
+          print("Verified: UMA F1 + E20 performance source configuration")
+          PY
+
+      - name: Apply UMA F2 allocated-range cache flush patch
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          git apply --check ../patches/uma-f2-used-range.patch
+          git apply ../patches/uma-f2-used-range.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          pool=Path("src/panfrost/vulkan/panvk_mempool.c").read_text()
+          priv=Path("src/panfrost/vulkan/panvk_priv_bo.h").read_text()
+          assert "size_t pool_used_size;" in priv
+          assert "bo->pool_used_size = 0;" in pool
+          assert "bo->pool_used_size = MAX2" in pool
+          assert pool.count("panvk_priv_bo_flush(bo, 0, bo->pool_used_size)") == 2
+          assert pool.count("panvk_priv_bo_invalidate(bo, 0, bo->bo->size)") == 2
+          print("UMA F2 active: allocated-range CPU flush, full GPU->CPU invalidate unchanged")
+          PY
+
+      - name: Set up Python and Android SDK/NDK
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Use preinstalled Android SDK command-line tools
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?ANDROID_HOME is not set on the runner}"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+          test -x "$SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --version
+
+      - name: Install Android NDK
+        run: |
+          set -euo pipefail
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
+          "$SDKMANAGER" --install "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Install Linux build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential gettext-base pkg-config patchelf             libelf-dev spirv-tools bison flex libdrm-dev             libx11-dev libxext-dev libxcb1-dev libx11-xcb-dev             llvm-20-dev libclang-20-dev libclc-20-dev libllvmspirvlib-20-dev
+          python -m pip install --upgrade pip
+          python -m pip install mako PyYAML "meson>=1.4" ninja packaging
+
+      - name: Build Panfrost host-side compiler tools
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          meson setup build-host             -Dplatforms=[] -Dgallium-drivers=[] -Dvulkan-drivers=[]             -Dtools=panfrost -Dprecomp-compiler=enabled             -Dinstall-precomp-compiler=true -Dllvm=enabled             -Dmesa-clc=enabled -Dinstall-mesa-clc=true
+          ninja -C build-host src/compiler/clc/mesa_clc             src/compiler/spirv/vtn_bindgen2 src/panfrost/clc/panfrost_compile
+          ln -sf mesa_clc build-host/src/compiler/clc/mesa-clc
+          ln -sf vtn_bindgen2 build-host/src/compiler/spirv/vtn-bindgen2
+          echo "$GITHUB_WORKSPACE/mesa/build-host/src/compiler/clc" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/mesa/build-host/src/compiler/spirv" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/mesa/build-host/src/panfrost/clc" >> "$GITHUB_PATH"
+
+      - name: Cross-build static libdrm for Android kbase
+        working-directory: mesa
+        env:
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/mesa/shims
+        run: |
+          set -euo pipefail
+          export MESON_WORKING_DIR="$PWD"
+          envsubst < android.toml > android-cross.txt
+          curl --retry 5 --retry-all-errors --retry-delay 4 -fL -o libdrm-2.4.133.tar.xz "https://dri.freedesktop.org/libdrm/libdrm-2.4.133.tar.xz"
+          echo "fc68f9d0ba2ea63c9432a299e14fea09fad7a8a66e8039fcd7802ca59f77b4f5  libdrm-2.4.133.tar.xz" | sha256sum -c -
+          tar -xf libdrm-2.4.133.tar.xz
+          meson setup libdrm-build libdrm-2.4.133 --cross-file android-cross.txt \
+            -Dbuildtype=release -Ddefault_library=static
+          meson compile -C libdrm-build
+          LIBDRM_ARCHIVE="$(find libdrm-build -name 'libdrm.a' -type f | head -1)"
+          test -n "$LIBDRM_ARCHIVE"
+          cp "$LIBDRM_ARCHIVE" shims/libdrm.a
+          rm shims/libdrm.so
+          test -s shims/libdrm.a
+
+      - name: Configure Android AArch64
+        working-directory: mesa
+        env:
+          PKG_CONFIG_LIBDIR: ${{ github.workspace }}/mesa/shims
+        run: |
+          set -euo pipefail
+          export MESON_WORKING_DIR="$PWD"
+          envsubst < android.toml > android-cross.txt
+          sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
+          meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
+
+      - name: Compile PanVK G720 UMA F2
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          meson compile -C build
+
+      - name: Validate and package UMA F2 for Bachata
+        run: |
+          set -euo pipefail
+          SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
+          test -s "$SO"
+          readelf -h "$SO" | grep -q AArch64
+          patchelf --remove-rpath "$SO"
+          # Reject incompatible host-OS dependencies before releasing.
+          ! readelf -d "$SO" | grep -Eq 'libdrm|libxcb|libX11|libxshmfence'
+          ! readelf -d "$SO" | grep -q '(RUNPATH)'
+          mkdir -p dist
+          cp "$SO" dist/libvulkan_panfrost.so
+          python3 - <<'PY'
+          import hashlib,json,pathlib,zipfile
+          out=pathlib.Path("dist")
+          binary=out/"libvulkan_panfrost.so"
+          sha=hashlib.sha256(binary.read_bytes()).hexdigest()
+          meta={
+            "schemaVersion":1,
+            "author":"PanVK G720 Experimental",
+            "description":"UMA Fase 2 allocated-range cache synchronization, on UMA F1 + E20. Experimental and not hardware verified.",
+            "driverVersion":"PanVK G720 beta.2 UMA-F2",
+            "libraryName":"libvulkan_panfrost.so",
+            "minApi":35,
+            "name":"PanVK G720 UMA Inteligente Fase 2",
+            "packageVersion":"0.1.0-beta.2.uma-f2",
+            "sanitizedArtifactSha256":sha,
+            "vendor":"Mesa"
+          }
+          (out/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n")
+          archive=out/"PanVK-G720-UMA-F2-Android-ARM64.zip"
+          with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
+            for f in ("libvulkan_panfrost.so","meta.json"):
+              z.write(out/f,f)
+          with zipfile.ZipFile(archive) as z:
+            assert z.testzip() is None
+            assert set(z.namelist())=={"libvulkan_panfrost.so","meta.json"}
+          print("binary sha256:",sha)
+          print("zip sha256:",hashlib.sha256(archive.read_bytes()).hexdigest())
+          PY
+
+      - name: Upload installable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: PanVK-G720-UMA-F2-Android-ARM64
+          path: dist/PanVK-G720-UMA-F2-Android-ARM64.zip
+          if-no-files-found: error
