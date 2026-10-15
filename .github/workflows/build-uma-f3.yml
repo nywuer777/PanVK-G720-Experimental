@@ -1,14 +1,16 @@
-name: PanVK G720 UMA F3 — Android ARM64
+name: PanVK G720 UMA F4 Diagnostics — Android ARM64
 
 on:
   push:
     branches:
-      - exp/uma-inteligente-fase3
+      - exp/uma-inteligente-fase4-diagnostico
     paths:
       - "vendor/PanVK-G720-UMA-F1-source.zip"
       - "patches/uma-f2-used-range.patch"
       - "patches/uma-f3-sorted-idle-big-bo.patch"
       - "tests/uma-f3-cache-test.c"
+      - "patches/uma-f4-csf-profile.patch"
+      - "tools/analyze-uma-f4.py"
       - ".github/workflows/build-uma-f3.yml"
   workflow_dispatch:
 
@@ -100,6 +102,30 @@ jobs:
             -Isrc ../tests/uma-f3-cache-test.c -o uma-f3-cache-test
           ASAN_OPTIONS=detect_leaks=1 ./uma-f3-cache-test
 
+      - name: Apply F4 diagnostic-only CSF timing patch
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          diff=Path("../patches/uma-f4-csf-profile.patch").read_text()
+          nonempty_removed=[x for x in diff.splitlines() if x.startswith("-") and not x.startswith("---") and x[1:].strip()]
+          assert not nonempty_removed, "F4 must add diagnostics only"
+          old=Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
+          assert "#define KBASE_RINGBUF_SIZE     (1024 * 1024)" in old
+          assert "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256" in old
+          assert "5ull * 1000000ull" in old
+          PY
+          git apply --check ../patches/uma-f4-csf-profile.patch
+          git apply ../patches/uma-f4-csf-profile.patch
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
+          assert "PANVK_G720_F4_PROFILE" in s and "PANVK-F4 submits=" in s
+          print("F4-DIAG instruments CPU timings; leaves CSF logic unchanged")
+          PY
+          python3 ../tools/analyze-uma-f4.py --self-test
+
       - name: Set up Python and Android SDK/NDK
         uses: actions/setup-python@v5
         with:
@@ -173,13 +199,13 @@ jobs:
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
           meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
 
-      - name: Compile PanVK G720 UMA F3
+      - name: Compile PanVK G720 UMA F4 Diagnostics
         working-directory: mesa
         run: |
           set -euo pipefail
           meson compile -C build
 
-      - name: Validate and package UMA F3 for Bachata
+      - name: Validate and package UMA F4 Diagnostics for Bachata
         run: |
           set -euo pipefail
           SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
@@ -199,17 +225,17 @@ jobs:
           meta={
             "schemaVersion":1,
             "author":"PanVK G720 Experimental",
-            "description":"UMA Fase 3 sorted idle big-BO recycling on UMA F2 + E20. Experimental, not hardware verified.",
-            "driverVersion":"PanVK G720 beta.2 UMA-F3",
+            "description":"UMA Fase 4 diagnostic CSF CPU timing on F3 baseline; diagnostic-only, not hardware verified.",
+            "driverVersion":"PanVK G720 beta.2 UMA-F4-DIAG",
             "libraryName":"libvulkan_panfrost.so",
             "minApi":35,
-            "name":"PanVK G720 UMA Inteligente Fase 3",
-            "packageVersion":"0.1.0-beta.2.uma-f3",
+            "name":"PanVK G720 UMA Fase 4 Diagnostico CSF",
+            "packageVersion":"0.1.0-beta.2.uma-f4-diag",
             "sanitizedArtifactSha256":sha,
             "vendor":"Mesa"
           }
           (out/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n")
-          archive=out/"PanVK-G720-UMA-F3-Android-ARM64.zip"
+          archive=out/"PanVK-G720-UMA-F4-DIAG-Android-ARM64.zip"
           with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
             for f in ("libvulkan_panfrost.so","meta.json"):
               z.write(out/f,f)
@@ -223,6 +249,6 @@ jobs:
       - name: Upload installable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-UMA-F3-Android-ARM64
-          path: dist/PanVK-G720-UMA-F3-Android-ARM64.zip
+          name: PanVK-G720-UMA-F4-DIAG-Android-ARM64
+          path: dist/PanVK-G720-UMA-F4-DIAG-Android-ARM64.zip
           if-no-files-found: error
