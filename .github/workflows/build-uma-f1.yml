@@ -41,6 +41,12 @@ jobs:
               sync.unlink()
               sync.symlink_to("../android/sync.h")
           assert sync.resolve().is_file(), "Missing Android sync header"
+          x11=source/"shims/libx11-xcb.so"
+          if x11.is_file() and not x11.is_symlink():
+              assert x11.read_text().strip()=="libX11-xcb.so", "Unexpected X11 shim content"
+              x11.unlink()
+              x11.symlink_to("libX11-xcb.so")
+          assert x11.resolve().is_file(), "Missing X11 library shim"
           mem=(source/"src/panfrost/vulkan/panvk_mempool.c").read_text()
           queue=(source/"src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
           assert "panvk_uma_big_bo_budget" in mem
