@@ -1,0 +1,97 @@
+--- a/src/panfrost/vulkan/panvk_mempool.c
++++ b/src/panfrost/vulkan/panvk_mempool.c
+@@ -24,6 +24,28 @@
+    }
+ }
+ 
++/* UMA F3: idle *large* BOs are kept in nondecreasing capacity order.
++ * Only entries released by panvk_pool_reset() enter this list. The caller
++ * retains responsibility for the existing GPU-completion/lifetime rule.
++ * The small-BO freelist intentionally keeps its previous FIFO semantics.
++ */
++static void
++panvk_uma_cache_idle_big_bo(struct panvk_bo_pool *cache,
++                            struct panvk_priv_bo *bo)
++{
++   const size_t capacity = pan_kmod_bo_size(bo->bo);
++
++   list_for_each_entry(struct panvk_priv_bo, cached, &cache->free_bos, node) {
++      if (pan_kmod_bo_size(cached->bo) > capacity) {
++         /* list_addtail() inserts directly before the selected element. */
++         list_addtail(&bo->node, &cached->node);
++         return;
++      }
++   }
++
++   list_addtail(&bo->node, &cache->free_bos);
++}
++
+ /* Knockoff u_upload_mgr. Uploads wherever we left off, allocating new entries
+  * when needed.
+  *
+@@ -53,17 +75,14 @@
+       list_del(&bo->node);
+    } else {
+       if (pool->big_bo_pool) {
+-         /* UMA F1: use the smallest sufficient BO, not the first match.
+-          * Avoid consuming an oversized reusable allocation unnecessarily. */
+-         size_t best_size = SIZE_MAX;
++         /* UMA F3: the idle large-BO cache is capacity-sorted. The first
++          * sufficiently large entry is exactly the F1 best-fit choice, but
++          * subsequent candidates do not need to be scanned. */
+          list_for_each_entry(struct panvk_priv_bo, pooled_bo,
+                              &pool->big_bo_pool->free_bos, node) {
+-            const size_t candidate_size = pan_kmod_bo_size(pooled_bo->bo);
+-            if (panvk_uma_better_fit(candidate_size, bo_sz, best_size)) {
++            if (pan_kmod_bo_size(pooled_bo->bo) >= bo_sz) {
+                bo = pooled_bo;
+-               best_size = candidate_size;
+-               if (best_size == bo_sz)
+-                  break;
++               break;
+             }
+          }
+          if (bo)
+@@ -248,8 +267,14 @@
+    }
+ 
+    if (pool->big_bo_pool) {
+-      list_splicetail(&pool->big_bos, &pool->big_bo_pool->free_bos);
+-      list_inithead(&pool->big_bos);
++      /* Move only relinquished/idle BOs to the reusable sorted cache.
++       * Never recycle entries from an active pool or imported memory. */
++      while (!list_is_empty(&pool->big_bos)) {
++         struct panvk_priv_bo *bo =
++            list_first_entry(&pool->big_bos, struct panvk_priv_bo, node);
++         list_del(&bo->node);
++         panvk_uma_cache_idle_big_bo(pool->big_bo_pool, bo);
++      }
+       /* UMA F1: use shared RAM pressure to bound idle large allocations.
+        * Never touch active BOs, imported memory or app-owned VkDeviceMemory.
+        * Sample once per 256 resets instead of doing I/O per submission. */
+@@ -268,18 +293,14 @@
+             }
+             /* Evict largest free BOs first, retaining smaller reusable BOs. */
+             while (cached_bytes > max_cached) {
+-               struct panvk_priv_bo *victim = NULL;
+-               size_t victim_bytes = 0;
+-               list_for_each_entry(struct panvk_priv_bo, cached,
+-                                   &pool->big_bo_pool->free_bos, node) {
+-                  const size_t n = pan_kmod_bo_size(cached->bo);
+-                  if (n > victim_bytes) {
+-                     victim = cached;
+-                     victim_bytes = n;
+-                  }
+-               }
+-               if (!victim)
++               /* Largest idle BO is at the tail. Evict without a second
++                * list scan; preserve F1's total cache budget and cadence. */
++               if (list_is_empty(&pool->big_bo_pool->free_bos))
+                   break;
++               struct panvk_priv_bo *victim =
++                  list_last_entry(&pool->big_bo_pool->free_bos,
++                                  struct panvk_priv_bo, node);
++               const size_t victim_bytes = pan_kmod_bo_size(victim->bo);
+                list_del(&victim->node);
+                panvk_priv_bo_unref(victim);
+                cached_bytes -= victim_bytes;
