@@ -33,6 +33,14 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           source=Path("mesa")
+          # The slim ZIP serializes this symlink as a text placeholder.
+          # Restore the original relative symlink before compiling Android stubs.
+          sync=source/"include/android_stub/sync/sync.h"
+          if sync.is_file() and not sync.is_symlink():
+              assert sync.read_text().strip()=="../android/sync.h", "Unexpected sync header content"
+              sync.unlink()
+              sync.symlink_to("../android/sync.h")
+          assert sync.resolve().is_file(), "Missing Android sync header"
           mem=(source/"src/panfrost/vulkan/panvk_mempool.c").read_text()
           queue=(source/"src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
           assert "panvk_uma_big_bo_budget" in mem
