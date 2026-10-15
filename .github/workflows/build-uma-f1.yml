@@ -47,11 +47,22 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: android-actions/setup-android@v3
+      - name: Use preinstalled Android SDK command-line tools
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:?ANDROID_HOME is not set on the runner}"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort -V | tail -1)"
+          test -x "$SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --version
+
       - name: Install Android NDK
         run: |
           set -euo pipefail
-          sdkmanager --install "ndk;27.2.12479018"
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          set -o pipefail
+          "$SDKMANAGER" --install "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Install Linux build prerequisites
