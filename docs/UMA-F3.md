@@ -27,3 +27,17 @@ The F3 GitHub workflow runs archive/hash validation, F2 and F3 patch guards, the
 Sorting incurs insertion work when the pool resets; it may fail to increase FPS or even regress in workloads with many returned buffers and limited reuse. Do not use for a system-wide Vulkan driver. Preserve UMA F2 as rollback.
 
 Compare exactly the same scenes with original Bachata settings. Evaluate load success, typical FPS, worst frame times/stutter, memory growth, and rendering correctness. A successful CI build does **not** mean validated on device.
+
+## Project baseline decision — 2026-10-15
+
+**Selected baseline: UMA Fase 3** (best experimental version so far, by user report). Future performance work must branch from this version unless the user explicitly changes the baseline.
+
+Device test report:
+- Bachata loads/starts with the experimental UMA driver.
+- F1: noticeably more responsive, no major FPS increase.
+- F2: small improvement in stability, no major FPS increase.
+- F3: small FPS gain; selected as current best experimental reference.
+- Graphics glitches and game hangs were already present in the E20 baseline. This rules out their first appearance in UMA, but does **not** exclude changes in their frequency/severity; no controlled regression comparison has been completed.
+
+**Keep existing F3 code and build intact.** Avoid speculative changes or promotion to production. Preserve E20 and F2 artifacts as rollback paths. No full hardware/Vulkan conformance or quantitative frame-time benchmarking has been completed. Investigate command-submission bottlenecks as a *separate* next cycle, with measurements before changing synchronization.
+
