@@ -22,3 +22,32 @@ For the SAME game: open the left **Ambiente** page and screenshot the actual gam
 Gates: actual environment confirmed -> loaded ELF fingerprint confirmed -> CSF telemetry confirmed -> only then controlled F3-vs-branch performance comparison.
 
 The best-performing F3 baseline is untouched; F4.2 remains diagnostic pending proof of loaded library.
+
+
+## UPDATE — UI corrected; crash diagnostics unavailable on normal exit
+
+User verified: the left-side **Ambiente** screen is NOT a runtime switcher; it contains shadPS4 per-game settings (Audio/Debug/GPU/General). **Jogar** launches the game directly. Therefore, preceding instructions to use the left-side Ambiente page to prove Bionic vs GLIBC runtime were invalid and are **superseded**. The Drivers screen tab `NATIVE BIONIC` indicates per-runtime driver selection only, not the actual launch ABI. User reports export of the Bachata diagnostic ZIP is accessible **only following an actual crash**. Do not induce a crash to generate evidence.
+
+Official Bachata 0.2.2 release notes independently confirm glibc and Bionic runtimes have **separate per-runtime driver-profile selections**; they do not document how this particular 0.2.5 APK chooses runtime at launch: https://github.com/JICA98/Bachata-S4/releases/tag/0.2.2
+
+### Recommended safe capture (ADB/LADB, no crash, no root)
+
+Do not repeat `/proc/<pid>/maps` since Android denies it. To avoid the circular Logcat buffer overwriting the driver constructor emission, start a **live file-backed capture** before tapping Jogar, using app-filtered tag capture and a control marker:
+
+```sh
+logcat -c
+logcat -v threadtime -b main -f /sdcard/Download/panvk-f42-live.txt -r 2048 -n 2 -s PanVK_F42:V PANVK_CAPTURE:V EmulationService:V linker:V AndroidRuntime:E '*:S' &
+echo $! > /sdcard/Download/panvk-f42-logger.pid
+log -p i -t PANVK_CAPTURE BEFORE_GAME
+```
+
+Start and play the game, then return to LADB and run:
+
+```sh
+log -p i -t PANVK_CAPTURE AFTER_GAME
+kill "$(cat /sdcard/Download/panvk-f42-logger.pid)"
+```
+
+The `logcat` background job can die if its shell process is terminated or the app stops it, so first ensure the `BEFORE_GAME` control record persists; failures are not evidence of a driver problem. Attach `panvk-f42-live.txt` (and rotation siblings if present). Distinguish `PANVK_CAPTURE` markers produced by shell from actual driver tag `PanVK_F42`. A positive control with absent F4.2 tag shows the capture mechanism works, **not** definitive proof that the ELF was never loaded. If background jobs cannot survive LADB task switching, do not persist in repeated uninformative snapshots; request a public source APK or upstream loader logs to audit static driver-selection logic.
+
+No change to PanVK F3, F4.2 CSF, Vulkan render, or build artifacts. Wait for genuine spontaneous crash if app-only `application.log` evidence is required.
