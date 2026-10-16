@@ -296,7 +296,7 @@ jobs:
           readelf -h "$SO" | grep -q AArch64
           patchelf --remove-rpath "$SO"
           readelf -d "$SO" | grep -q liblog.so
-          strings "$SO" | grep -q G720-UMA-F4.2-LOGCAT-20261016
+          grep -a -q "G720-UMA-F4.2-LOGCAT-20261016" "$SO"
           # Reject incompatible host-OS dependencies before releasing.
           ! readelf -d "$SO" | grep -Eq 'libdrm|libxcb|libX11|libxshmfence'
           ! readelf -d "$SO" | grep -q '(RUNPATH)'
