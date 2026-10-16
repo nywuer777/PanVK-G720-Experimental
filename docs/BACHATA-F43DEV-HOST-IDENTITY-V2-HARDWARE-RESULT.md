@@ -17,3 +17,11 @@ Identificar o runtime efetivamente selecionado e confirmar carregamento da F4.3 
 ## Preservação
 
 Bachata oficial não modificado. PanVK Fase 3 estável `3cacc2f0bcbb` preservado. Evitar novas mudanças no CSF/UMA sem confirmação de driver carregado.
+
+## Confirmação visual adicional — 2026-10-16
+
+O usuário confirmou explicitamente: **"Sim, inicia normalmente"** e enviou captura do jogo **God of War III Remastered** no **menu principal**, com imagem renderizada e controles virtuais do Bachata visíveis. O HUD apresentou uma leitura instantânea de **37 FPS**, CPU **17%**, RAM **70%** e temperatura **35,8 °C**. Esses números são leituras do menu, não benchmark, e a captura não demonstra ainda controles funcionais ou estabilidade de gameplay.
+
+A sessão experimental já exibiu processo filho `libbachata_host_loader.so` (PID 32055, PPID 29111), consistente com o host Linux/GLIBC. O registro Logcat mostra inicialização do `EmulationService`, mas não `PanVK_F43`. A inclusão do driver Bionic F4.3 no APK **não prova uso pela sessão GLIBC**. Antes de otimizar GPU ou considerar F4.3 validada em hardware, coletar diagnóstico nativo espontâneo/exportado pelo Bachata que identifique ABI/runtime efetivo e biblioteca Vulkan. **Não induzir crash**.
+
+Status do milestone: **Host Identity V2 corrigido + menu do jogo renderizado em hardware**. Gameplay e identificação do ICD pendentes.
