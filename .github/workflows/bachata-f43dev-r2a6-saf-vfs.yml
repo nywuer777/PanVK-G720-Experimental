@@ -1,0 +1,188 @@
+name: Bachata F43DEV R2A6 - readonly SAF VFS bridge (mount OFF)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6-vfs-readonly
+    paths:
+      - .github/workflows/bachata-f43dev-r2a6-saf-vfs.yml
+      - tools/bachata-r2a6/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r2a6-source-vfs-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native R2A6 readonly mount path regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6 \
+            tools/bachata-r2a6/test_saf_vfs_readonly.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6-vfs
+          /tmp/r2a6-vfs | tee /tmp/r2a6-vfs.log
+          grep -Fq 'R2A6_READONLY_VFS_PATH_TESTS_PASS' /tmp/r2a6-vfs.log
+      - name: ASan and UBSan for R2A6 mount resolver
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6 \
+            tools/bachata-r2a6/test_saf_vfs_readonly.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6-vfs-asan
+          ASAN_OPTIONS=detect_leaks=1 /tmp/r2a6-vfs-asan |
+            tee /tmp/r2a6-vfs-asan.log
+          grep -Fq 'R2A6_READONLY_VFS_PATH_TESTS_PASS' /tmp/r2a6-vfs-asan.log
+      - name: Reconfirm R2A5 33 synthetic broker scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 tools/bachata-r2a5/test_bsf1_mock.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a5-recheck
+          /tmp/r2a5-recheck | tee /tmp/r2a5-recheck.log
+          grep -Fq 'R2A5_MOCK_BROKER_TESTS_PASS count=33' /tmp/r2a5-recheck.log
+      - name: Exact upstream checkout and combined R2A to R2A6 source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 6
+          grep -Fq 'AdoptReadOnlyFd' upstream/src/common/io_file.h
+          grep -Fq 'saf_vfs_readonly.cpp' upstream/CMakeLists.txt
+          grep -Fq 'BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED' upstream/src/main.cpp
+          test -s upstream/src/platform/bachata/saf_vfs_readonly.cpp
+          git -C upstream diff -- CMakeLists.txt src/common/io_file.cpp src/common/io_file.h \
+            src/main.cpp src/video_core/texture_cache/image.h \
+            src/video_core/renderer_vulkan/vk_rasterizer.cpp > R2A6-source.patch
+          sha256sum R2A6-source.patch > SHA256SUMS.txt
+      - name: Upload auditable source diff
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6-readonly-vfs-source-MOUNT-OFF
+          path: |
+            R2A6-source.patch
+            SHA256SUMS.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  r2a6-arm64-transport:
+    needs: r2a6-source-vfs-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM64 GLIBC Linux compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Compile linked BSF1 and VFS adapter as AArch64 GLIBC
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -fPIC -shared -Itools/bachata-r2a5 -Itools/bachata-r2a6 \
+            tools/bachata-r2a5/saf_bsf1_client.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            -o result/libbachata_r2a6_bsf1_vfs_READONLY_TEST.so
+          readelf -h result/libbachata_r2a6_bsf1_vfs_READONLY_TEST.so > result/elf-header.txt
+          readelf -d result/libbachata_r2a6_bsf1_vfs_READONLY_TEST.so > result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' result/elf-header.txt
+          if grep -Fq 'Shared library: [liblog.so]' result/elf-dynamic.txt; then exit 6; fi
+          sha256sum result/libbachata_r2a6_bsf1_vfs_READONLY_TEST.so > result/SHA256SUMS.txt
+          printf 'target=linux-arm64-glibc\nsaf_guest_mount=OFF\nreal_android_broker=NOT_TESTED\n' > result/PROVENANCE.txt
+      - name: Upload cross-compile evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6-arm64-glibc-vfs-test-library
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
+
+  r2a6-full-fex:
+    needs: [r2a6-source-vfs-preflight, r2a6-arm64-transport]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Container prerequisites
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Pinned source and recursive FEXCore submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Apply exact R2A / R2A2 / R2A4 / R2A5 / R2A6 chain
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 6
+      - name: Debian ARM64 GLIBC build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Compile full shadPS4 GLIBC/FEX with R2A6 read-only adapter
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          if grep -Fq 'Shared library: [liblog.so]' ../result/elf-dynamic.txt; then exit 5; fi
+          grep -aFq 'BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED' "$ELF"
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A6-VFS-ADAPTER-MOUNT-OFF
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A6-VFS-ADAPTER-MOUNT-OFF > SHA256SUMS.txt)
+          printf 'source=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\npatches=R2A,R2A2,R2A4,R2A5,R2A6\nabi=linux-glibc-arm64\nreadonly_fd_adopt=COMPILED\nsaf_guest_vfs_mount=OFF\nandroid_broker_handshake=NOT_TESTED\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\napk_integrated=NO\n' > ../result/PROVENANCE.txt
+      - name: Publish noninstallable R2A6 core
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6-glibc-vfs-adapter-MOUNT-OFF
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
