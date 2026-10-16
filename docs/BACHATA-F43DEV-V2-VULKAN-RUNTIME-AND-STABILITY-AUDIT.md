@@ -35,3 +35,11 @@ Generated read-only `analyze_f43_runtime.py` analyzer, `test_runtime_audit.py` t
 Use one natural 3–5 minute **New Game** session on God of War III Remastered; record gameplay FPS, visual artifacts, controls, stability; delimit with `PANVK_CAPTURE` Logcat tag before/after launch; export a narrow Logcat text. A native diagnostic ZIP should be supplied **only if available without inducing a crash**. Absence of `PanVK_F43` in Android Logcat does NOT alone establish the driver was not used.
 
 **Gate for GLIBC F4.3 port or CSF changes:** current-session native log explicitly confirming ABI and loaded ICD. Preserve stable PanVK F3 `3cacc2f0bcbb`, F43DEV V2 functional APK and official Bachata.
+
+## Feedback de gameplay — primeira missão (2026-10-16)
+
+O usuário informou FPS em jogo entre **15 e 22**, e depois confirmou **alguns travamentos ocasionais** na primeira missão de **God of War III Remastered**. Não observou problemas gráficos **até o momento**, mas ressalvou que ainda pode encontrá-los posteriormente e enviará screenshot se necessário.
+
+**Interpretação delimitada:** inicialização e renderização de menu verificadas, gameplay alcançado conforme relato; estabilidade não aprovada por conta dos travamentos. A ausência atual de artefatos gráficos não constitui teste de compatibilidade visual completo. Não atribuir a causa a shader compilation, CSF, PanVK UMA, memória ou FEX sem telemetria correlacionada. FPS de 15–22 é intervalo relatado, não benchmark controlado.
+
+**Próximo gate:** identificar driver efetivamente carregado pela sessão GLIBC e caracterizar travamentos (intervalos, primeira aparição vs repetição, temperatura/memória se disponíveis). Preservar Bachata F43DEV V2 funcional e PanVK Fase 3 estável.
