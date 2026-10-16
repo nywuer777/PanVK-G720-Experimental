@@ -43,6 +43,7 @@ int main() {
     }) {
         verify(!mount.Resolve(path));
     }
+    verify(!mount.Resolve(std::string_view("/app0/fo\\0o", 10)));
     ReadOnlyMount bad(broker, "games/../../tmp");
     verify(!bad.Resolve("/app0/eboot.bin"));
     ReadOnlyMount bad2(broker, "");
