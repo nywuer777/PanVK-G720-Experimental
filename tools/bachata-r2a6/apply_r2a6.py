@@ -14,7 +14,7 @@ from pathlib import Path
 PIN = "be6bc2e9c60799e071dd2fafa6216e8d80ec619c"
 # Original pinned upstream source blobs, NOT mutated by R2A..R2A5 patches.
 BLOBS = {
-    "src/common/io_file.h": "PLACEHOLDER",
+    "src/common/io_file.h": "d4e4b2e47ccc859580c70a749976cd4fc21d2526",
     "src/common/io_file.cpp": "249d0e0f4768062b41e0ab1a5d4cf41de994380b",
 }
 CMAKE_BEFORE = """        src/platform/bachata/saf_bsf1_client.cpp
@@ -110,8 +110,10 @@ int IOFile::AdoptReadOnlyFd(int fd, const fs::path& logical_guest_path) {
     // The descriptor is consumed on success or failure. Do not expose a writable stream.
     if (fd < 0) return EBADF;
     const std::string path = logical_guest_path.generic_string();
-    if ((path != "/app0" && !path.starts_with("/app0/")) ||
-        path.find("/../") != std::string::npos || path.find("/./") != std::string::npos) {
+    if (!path.starts_with("/app0/") || path.size() <= 6 ||
+        fs::path(path).lexically_normal().generic_string() != path ||
+        path.find("//") != std::string::npos ||
+        path.find_first_of("\r\n\t") != std::string::npos) {
         ::close(fd);
         return EINVAL;
     }
