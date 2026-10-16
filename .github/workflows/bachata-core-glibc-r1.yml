@@ -1,0 +1,87 @@
+name: Bachata F43DEV R1 - pinned GLIBC FEX source build
+
+on:
+  push:
+    branches:
+      - exp/bachata-core-glibc-r1
+    paths:
+      - .github/workflows/bachata-core-glibc-r1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Fetch pinned editable public source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git source-candidate
+          git -C source-candidate checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          test "$(git -C source-candidate rev-parse HEAD)" = be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          for name in CMakeLists.txt runtime/scripts/build-shadps4-arm64.sh runtime/scripts/build-runtime-debian.sh runtime/scripts/build-fexcore-smoke-aarch64.sh src/video_core/texture_cache/image_view.cpp src/video_core/renderer_vulkan/vk_rasterizer.cpp; do
+            test -f "source-candidate/$name"
+          done
+          echo "Source SHA verified: $(git -C source-candidate rev-parse HEAD)"
+          echo "Candidate image_view.cpp lines: $(wc -l < source-candidate/src/video_core/texture_cache/image_view.cpp)"
+          echo "Candidate vk_rasterizer.cpp lines: $(wc -l < source-candidate/src/video_core/renderer_vulkan/vk_rasterizer.cpp)"
+          echo 'This is NOT the installed Bachata core revision 433c7f30.'
+
+  arm64-glibc-candidate:
+    needs: source-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install basic source tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - name: Fetch exact source and all submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          cd upstream
+          git checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          test "$(git rev-parse HEAD)" = be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git submodule update --init --recursive --jobs 8
+          git submodule status --recursive | tee ../source-submodules.txt
+          if grep -E '^[+-U]' ../source-submodules.txt; then echo 'SUBMODULE_NOT_PINNED'; exit 4; fi
+      - name: Install cross-compile dependencies in disposable Debian Trixie
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Compile FEXCore and shadPS4 Linux ARM64 GLIBC
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-runtime-debian.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          readelf -h "$ELF" | grep -Eq 'Machine:[[:space:]]+AArch64'
+          readelf -h "$ELF" | grep -Eq 'Class:[[:space:]]+ELF64'
+          readelf -l "$ELF" | grep -F '/lib/ld-linux-aarch64.so.1'
+          readelf -d "$ELF" | grep -F 'Shared library: [libc.so.6]'
+          if readelf -d "$ELF" | grep -F 'Shared library: [liblog.so]'; then echo BIONIC_REJECTED; exit 5; fi
+          mkdir -p ../result
+          cp "$ELF" ../result/shadps4-arm64-glibc-CANDIDATE
+          (cd ../result && sha256sum shadps4-arm64-glibc-CANDIDATE > SHA256SUMS.txt)
+          printf 'source_commit=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\nabi=linux-glibc-arm64\nstatus=BUILT_NOT_INTEGRATED\napk_compatible=NOT_TESTED\noutlast_fixed=NOT_TESTED\nminecraft_fixed=NOT_TESTED\n' > ../result/PROVENANCE.txt
+      - name: Upload ELF candidate (NOT an installable APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r1-glibc-core-CANDIDATE-not-installable
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
