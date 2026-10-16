@@ -1,4 +1,4 @@
-name: Bachata F43DEV R1 - pinned GLIBC FEX source build
+name: Bachata F43DEV R1 - pinned GLIBC FEX source build (core-only)
 
 on:
   push:
@@ -61,22 +61,29 @@ jobs:
           set -euo pipefail
           cd upstream
           BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
-      - name: Compile FEXCore and shadPS4 Linux ARM64 GLIBC
+      - name: Compile FEXCore and shadPS4 Linux ARM64 GLIBC (core-only gate)
         shell: bash
         run: |
           set -euo pipefail
           cd upstream
-          bash runtime/scripts/build-runtime-debian.sh
+          # R1 acceptance: compile native FEXCore + ARM64 GLIBC shadPS4 only.
+          # The full runtime-debian packaging additionally builds the Vortek ICD
+          # and needs vulkan.h/vk_icd.h: a separate R2 dependency gate.
+          bash runtime/scripts/build-shadps4-arm64.sh
           ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
           test -s "$ELF"
-          readelf -h "$ELF" | grep -Eq 'Machine:[[:space:]]+AArch64'
-          readelf -h "$ELF" | grep -Eq 'Class:[[:space:]]+ELF64'
-          readelf -l "$ELF" | grep -F '/lib/ld-linux-aarch64.so.1'
-          readelf -d "$ELF" | grep -F 'Shared library: [libc.so.6]'
-          if readelf -d "$ELF" | grep -F 'Shared library: [liblog.so]'; then echo BIONIC_REJECTED; exit 5; fi
+          readelf -h "$ELF" > /tmp/core-elf-header.txt
+          readelf -l "$ELF" > /tmp/core-elf-program.txt
+          readelf -d "$ELF" > /tmp/core-elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' /tmp/core-elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' /tmp/core-elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' /tmp/core-elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' /tmp/core-elf-dynamic.txt
+          if grep -Fq 'Shared library: [liblog.so]' /tmp/core-elf-dynamic.txt; then echo BIONIC_REJECTED; exit 5; fi
           mkdir -p ../result
           cp "$ELF" ../result/shadps4-arm64-glibc-CANDIDATE
           (cd ../result && sha256sum shadps4-arm64-glibc-CANDIDATE > SHA256SUMS.txt)
+          cp /tmp/core-elf-header.txt /tmp/core-elf-program.txt /tmp/core-elf-dynamic.txt ../result/
           printf 'source_commit=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\nabi=linux-glibc-arm64\nstatus=BUILT_NOT_INTEGRATED\napk_compatible=NOT_TESTED\noutlast_fixed=NOT_TESTED\nminecraft_fixed=NOT_TESTED\n' > ../result/PROVENANCE.txt
       - name: Upload ELF candidate (NOT an installable APK)
         uses: actions/upload-artifact@v4
