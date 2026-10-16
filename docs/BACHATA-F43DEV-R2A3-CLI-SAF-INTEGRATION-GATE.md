@@ -28,3 +28,14 @@ Because the candidate uses CLI11 `app.allow_extras()`, unknown flags **might not
 ## Reproducible materials
 
 CI workflow `.github/workflows/bachata-f43dev-r2a3-saf-contract-audit.yml` uses a fresh pinned Git checkout to check real public source and emits a **BLOCKED** report without confidential diagnostic tokens. Local R2A.3 staged runtime (two files and report) and auditor script/tests are distributed separately; neither is a signed APK.
+
+## Completion evidence (2026-10-16)
+
+GitHub Actions [#38970799667](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38970799667) **SUCCESS as an audit**, not a runtime compatibility approval. CI checked the original pinned `src/main.cpp` and confirmed all 3 required SAF option names missing; published non-sensitive `APK_PROMOTION_BLOCKED_SAF_CONTRACT` report artifact [#12077315721](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38970799667/artifacts/12077315721). Exact sensitive token values were NOT included.
+
+Local tests: **22/22 PASS** (10 CLI contract/secret redaction, 12 runtime staging invariants). Original F43DEV V2 APK v2 RSA signature/digest, package, cert and Bionic manifest verified. Compare native GLIBC binaries found identical DT_NEEDED and no additional versioned glibc requirements. Staged runtime ZIP with 394 unchanged/3 changed entries and validated complete 397-entry manifest. Deliverables:
+
+- `Bachata-F43DEV-R2A3-CLI-SAF-AUDITORIA.zip` SHA-256 `2b144ffa9514967ae15b0e643ffa2c3014b539ac961fe065772654e031992fa3` (13,573 bytes)
+- `Bachata-F43DEV-R2A3-RUNTIME-STAGED-NAO-INSTALAR.zip` SHA-256 `e87bd9bc1ae15d4310da4380d3875a671c3083cdf520b8663be9611ec8f20638` (53,593,284 bytes). Includes **assets only, NOT an APK**.
+
+The known-good signed V2 APK remains byte-identical and is intentionally NOT packaged alongside the new GLIBC core in a signed APK. Release/installation still BLOCKED pending correct SAF implementation and hardware proof.
