@@ -45,3 +45,14 @@ Compare installed `base.apk` hash to the supplied release APK SHA-256. A mismatc
 Fork an authorized build of the native runtime and pass Android `ApplicationInfo.sourceDir` / `PackageManager`-verified package path explicitly to the native host validation (with issuer package binding and signature verification retained), instead of depending solely on `/proc/self/maps`. Log which path-resolution step failed; keep rejection on mismatched package or signer. Requires corresponding Android source/build and a separate developer signature (or author-signed release) before a runnable modified APK can be safely tested.
 
 F3 remains preserved; PanVK F4.3 dual-ICD exports unaffected; no APK was modified, resigned or installed in this audit.
+
+## DEVICE CONFIRMATION — 2026-10-16
+
+User ran from LADB `pm path com.bachatas4.android.github` and `sha256sum` on the installed base.apk; returned:
+
+```text
+package:/data/app/~~AQYWS60UKVP1WH8snzNNPA==/com.bachatas4.android.github-BYCLYLYojwexDXerS1k5Qw==/base.apk
+1df49463f396df8b6f042230bdc1bb9f948b8e69894c378915920875c40ab0ee  /data/app/~~AQYWS60UKVP1WH8snzNNPA==/com.bachatas4.android.github-BYCLYLYojwexDXerS1k5Qw==/base.apk
+```
+
+**Result:** Byte-exact identity with the previously audited official v0.2.5 APK, whose signer digest matched the allowed native signer list. This rules out installed-base-APK byte substitution as explanation for this particular installation, but does not establish that `DiscoverHostApkPath` in the child process resolved that path, successfully read it, or obtained the same cert digest. It also does not establish the correct launch runtime and IPC environment. The next forensic input should be a naturally generated Bachata crash diagnostic ZIP from this incident, correlated by timestamp and runtimeHost; do not provoke a new crash or disable identity checks.
