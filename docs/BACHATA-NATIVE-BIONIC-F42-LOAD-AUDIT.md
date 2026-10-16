@@ -51,3 +51,22 @@ kill "$(cat /sdcard/Download/panvk-f42-logger.pid)"
 The `logcat` background job can die if its shell process is terminated or the app stops it, so first ensure the `BEFORE_GAME` control record persists; failures are not evidence of a driver problem. Attach `panvk-f42-live.txt` (and rotation siblings if present). Distinguish `PANVK_CAPTURE` markers produced by shell from actual driver tag `PanVK_F42`. A positive control with absent F4.2 tag shows the capture mechanism works, **not** definitive proof that the ELF was never loaded. If background jobs cannot survive LADB task switching, do not persist in repeated uninformative snapshots; request a public source APK or upstream loader logs to audit static driver-selection logic.
 
 No change to PanVK F3, F4.2 CSF, Vulkan render, or build artifacts. Wait for genuine spontaneous crash if app-only `application.log` evidence is required.
+
+
+## UPDATE — 2026-10-16 10:54:43–10:55:34 UTC−3: captured full test window, no F4.2 tag
+
+User provided `panvk-f42-check.txt`, exactly 7 lines (including buffer header), produced after explicitly clearing `logcat`, writing a `PANVK_CAPTURE BEFORE_GAME` control, launching a game and writing `PANVK_CAPTURE AFTER_GAME` then dumping `main` with tags `PANVK_CAPTURE:I PanVK_F42:V EmulationService:V`.
+
+Verbatim:
+```text
+--------- beginning of main
+10-16 10:54:43.022 25038 25038 I PANVK_CAPTURE: BEFORE_GAME
+10-16 10:54:52.007 18482 25123 I EmulationService: Adreno turbo requested: false
+10-16 10:54:52.013 18482 25123 I EmulationService: Adreno turbo supported: false
+10-16 10:54:52.275 18482 25123 I EmulationService: staging diag env={BACHATA_MALI_GPU_OPT=1, BACHATA_STAGING_TICK_LAG=12}
+10-16 10:55:34.956 25338 25338 I PANVK_CAPTURE: AFTER_GAME
+```
+
+**Interpretation**: The log window and expected Android logcat capture method were independently verified, yet **no `PanVK_F42` tag** was observed between the bracketing control markers. This makes the prior “buffer window overwritten/filtered incorrectly” explanation less plausible. **It still does not conclusively establish the ELF was not mapped**, nor which library/device was selected. `EmulationService` variable `BACHATA_MALI_GPU_OPT=1` is not proof of a specific Vulkan ICD. A logcat tag emitted by a driver only fires if code executed and logging reached Android logd.
+
+Do not run additional `/proc` dumps, background `logcat -f` loops, or trigger deliberate crashes. Next step should be direct inspection of Bachata's actual loader/driver-routing implementation or an explicit native-loader `dlopen` success/failure path, preferably using upstream source or diagnostic logs. If none is accessible, evidence status is "driver load unconfirmed", not "different driver proven". No modifications to F3/F4.2.
