@@ -1,9 +1,9 @@
-name: PanVK G720 UMA F4.2 Logcat Diagnostics — Android ARM64
+name: PanVK G720 UMA F4.3 Dual HAL/ICD — Android ARM64
 
 on:
   push:
     branches:
-      - exp/uma-inteligente-fase4-2-logcat
+      - exp/uma-inteligente-fase4-3-icd-dual
     paths:
       - "vendor/PanVK-G720-UMA-F1-source.zip"
       - "patches/uma-f2-used-range.patch"
@@ -14,6 +14,7 @@ on:
       - "tools/uma-f4-1-stderr-relay.py"
       - "tools/uma-f4-1-1-markers.py"
       - "tools/uma-f4-2-logcat.py"
+      - "tools/uma-f4-3-icd-exports.py"
       - "tools/analyze-uma-f4-2.py"
       - ".github/workflows/build-uma-f3.yml"
   workflow_dispatch:
@@ -209,6 +210,28 @@ jobs:
           print("F4.2 only redirects diagnostics, does not modify CSF synchronization")
           PY
 
+      - name: F4.3 guarded dual Android HAL and direct-ICD exports
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          python3 ../tools/uma-f4-3-icd-exports.py --self-test
+          python3 ../tools/uma-f4-3-icd-exports.py --root . --diff ../docs/uma-f4-3-generated.diff
+          python3 - <<'PY'
+          from pathlib import Path
+          m=Path('src/vulkan/vulkan-android.sym').read_text()
+          sy=Path('src/vulkan/vulkan-icd-android-symbols.txt').read_text()
+          q=Path('src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c').read_text()
+          expected=('vk_icdGetInstanceProcAddr', 'vk_icdGetPhysicalDeviceProcAddr',
+                    'vk_icdNegotiateLoaderICDInterfaceVersion')
+          assert m.count('HMI;')==1
+          assert all(m.count(x+';')==1 for x in expected)
+          assert all(sy.count(x+'\n')==1 for x in expected)
+          assert 'PANVK-F4.3 LIB_LOADED' in q and 'PanVK_F43' in q
+          assert '#define KBASE_RINGBUF_SIZE     (1024 * 1024)' in q
+          assert '#define KBASE_TILER_HEAP_RENEW_INTERVAL 256' in q
+          print('F4.3 map + symbol-check list + diagnostic fingerprint validated')
+          PY
+
       - name: Set up Python and Android SDK/NDK
         uses: actions/setup-python@v5
         with:
@@ -282,13 +305,13 @@ jobs:
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
           meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
 
-      - name: Compile PanVK G720 UMA F4.2 Logcat Diagnostics
+      - name: Compile PanVK G720 UMA F4.3 dual ICD Android
         working-directory: mesa
         run: |
           set -euo pipefail
           meson compile -C build
 
-      - name: Validate and package UMA F4.2 Logcat Diagnostics for Bachata
+      - name: Validate and package UMA F4.3 dual ICD Android for Bachata
         run: |
           set -euo pipefail
           SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
@@ -296,7 +319,11 @@ jobs:
           readelf -h "$SO" | grep -q AArch64
           patchelf --remove-rpath "$SO"
           readelf -d "$SO" | grep -q liblog.so
-          grep -a -q "G720-UMA-F4.2-LOGCAT-20261016" "$SO"
+          grep -a -q "G720-UMA-F4.3-ICD-DUAL-20261016" "$SO"
+          for sym in HMI vk_icdGetInstanceProcAddr vk_icdGetPhysicalDeviceProcAddr vk_icdNegotiateLoaderICDInterfaceVersion; do
+            nm -D --defined-only "$SO" | awk '{print $3}' | grep -Fxq "$sym" || { echo "Missing exported symbol: $sym"; exit 1; }
+          done
+          echo "F4.3 ELF exports all four required entrypoints"
           # Reject incompatible host-OS dependencies before releasing.
           ! readelf -d "$SO" | grep -Eq 'libdrm|libxcb|libX11|libxshmfence'
           ! readelf -d "$SO" | grep -q '(RUNPATH)'
@@ -308,21 +335,22 @@ jobs:
           binary=out/"libvulkan_panfrost.so"
           sha=hashlib.sha256(binary.read_bytes()).hexdigest()
           meta={
+            "loaderInterface":"android-hal-hmi+vulkan-direct-icd",
             "schemaVersion":1,
             "author":"PanVK G720 Experimental",
-            "description":"UMA F4.2 diagnostic mirrors F4/F4.1.1 markers to Android Logcat + stderr; F3 preserved, hardware pending.",
-            "diagnosticBuildId":"G720-UMA-F4.2-LOGCAT-20261016",
-            "logcatTag":"PanVK_F42",
-            "driverVersion":"PanVK G720 beta.2 UMA-F4.2-LOGCAT-DIAG",
+            "description":"UMA F4.3 dual Android HAL HMI + Vulkan direct-ICD exports, with F4.2 diagnostic markers; F3 preserved, hardware pending.",
+            "diagnosticBuildId":"G720-UMA-F4.3-ICD-DUAL-20261016",
+            "logcatTag":"PanVK_F43",
+            "driverVersion":"PanVK G720 beta.2 UMA-F4.3-ICD-DUAL-DIAG",
             "libraryName":"libvulkan_panfrost.so",
             "minApi":35,
-            "name":"PanVK G720 UMA Fase 4.2 Logcat",
-            "packageVersion":"0.1.0-beta.2.uma-f4.2-logcat-diag",
+            "name":"PanVK G720 UMA Fase 4.3 ICD Dual",
+            "packageVersion":"0.1.0-beta.2.uma-f4.3-icd-dual-diag",
             "sanitizedArtifactSha256":sha,
             "vendor":"Mesa"
           }
           (out/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n")
-          archive=out/"PanVK-G720-UMA-F4.2-LOGCAT-DIAG-Android-ARM64.zip"
+          archive=out/"PanVK-G720-UMA-F4.3-ICD-DUAL-Android-ARM64.zip"
           with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
             for f in ("libvulkan_panfrost.so","meta.json"):
               z.write(out/f,f)
@@ -336,6 +364,6 @@ jobs:
       - name: Upload installable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-UMA-F4.2-LOGCAT-DIAG-Android-ARM64
-          path: dist/PanVK-G720-UMA-F4.2-LOGCAT-DIAG-Android-ARM64.zip
+          name: PanVK-G720-UMA-F4.3-ICD-DUAL-Android-ARM64
+          path: dist/PanVK-G720-UMA-F4.3-ICD-DUAL-Android-ARM64.zip
           if-no-files-found: error
