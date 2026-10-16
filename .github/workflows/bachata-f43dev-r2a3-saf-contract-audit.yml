@@ -1,0 +1,71 @@
+name: Bachata F43DEV R2A.3 - SAF contract audit (NOT an APK)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a3-saf-contract-gate
+    paths:
+      - .github/workflows/bachata-f43dev-r2a3-saf-contract-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  saf-launch-contract-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout public pinned source
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          test "$(git -C upstream rev-parse HEAD)" = be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+      - name: Compare privacy-safe real session flag names and parsed options
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,re
+          from pathlib import Path
+          source=Path('upstream/src/main.cpp').read_text()
+          observed={'--bachata-contract','--bachata-saf-socket','--bachata-saf-token',
+                    '--bachata-socket','--bachata-storage-root','--ignore-game-patch','--override-root'}
+          required={'--bachata-contract','--bachata-saf-socket','--bachata-saf-token'}
+          matches=re.findall(r'app\.add_(?:option|flag)\s*\(\s*"([^"]+)"',source)
+          declared={v for item in matches for v in item.split(',') if v.startswith('--')}
+          assert required <= observed
+          assert {'--bachata-socket','--bachata-storage-root'} <= declared
+          unsupported=sorted(observed-declared)
+          missing_saf=sorted(required-declared)
+          if missing_saf != sorted(required):
+              raise RuntimeError('Source contract changed; re-audit required before migration')
+          assert 'allow_extras()' in source
+          saf_dir=Path('upstream/src/platform/bachata')
+          saf_impl=[p.name for p in saf_dir.glob('*saf*') if p.is_file()]
+          assert not saf_impl,'SAF source appeared; re-audit required'
+          result={
+            'status':'APK_PROMOTION_BLOCKED_SAF_CONTRACT',
+            'source_commit':'be6bc2e9c60799e071dd2fafa6216e8d80ec619c',
+            'game_reports':'Outlast CUSA00325 / Minecraft CUSA00265',
+            'observed_flag_names_only':sorted(observed),
+            'supported_parsed_option_names':sorted(declared),
+            'observed_but_undeclared':unsupported,
+            'required_saf_missing':missing_saf,
+            'source_saf_client_files':saf_impl,
+            'warning':'CLI11 may consume unknown options as extras; that does NOT implement SAF or contract security.',
+            'promotion_result':'DO_NOT_SIGN_OR_INSTALL_R2A2_INSTEAD_OF_V2',
+            'private_socket_tokens_saved':False,
+            'hardware_handshake_tested':False
+          }
+          Path('R2A3-SAF-CONTRACT-CI-REPORT.json').write_text(json.dumps(result,indent=2)+'\n')
+          print(json.dumps({'status':result['status'],'missing_saf':missing_saf},indent=2))
+          PY
+      - name: Upload audit report - NO executable or APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a3-SAF-compatibility-BLOCKED-report
+          path: R2A3-SAF-CONTRACT-CI-REPORT.json
+          if-no-files-found: error
+          retention-days: 14
