@@ -1,9 +1,9 @@
-name: PanVK G720 UMA F4.1.1 Early CSF Markers — Android ARM64
+name: PanVK G720 UMA F4.2 Logcat Diagnostics — Android ARM64
 
 on:
   push:
     branches:
-      - exp/uma-inteligente-fase4-1-1-marcadores
+      - exp/uma-inteligente-fase4-2-logcat
     paths:
       - "vendor/PanVK-G720-UMA-F1-source.zip"
       - "patches/uma-f2-used-range.patch"
@@ -13,6 +13,8 @@ on:
       - "tools/analyze-uma-f4.py"
       - "tools/uma-f4-1-stderr-relay.py"
       - "tools/uma-f4-1-1-markers.py"
+      - "tools/uma-f4-2-logcat.py"
+      - "tools/analyze-uma-f4-2.py"
       - ".github/workflows/build-uma-f3.yml"
   workflow_dispatch:
 
@@ -184,6 +186,29 @@ jobs:
           print("F4.1.1 only adds diagnostic breadcrumbs; F3 synchronization preserved")
           PY
 
+      - name: Add F4.2 driver fingerprint and Logcat mirror
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          python3 ../tools/uma-f4-2-logcat.py --self-test
+          python3 ../tools/analyze-uma-f4-2.py --self-test
+          python3 ../tools/uma-f4-2-logcat.py --source src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c --diff ../docs/uma-f4-2-generated.diff
+          python3 - <<'PY'
+          from pathlib import Path
+          s=Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
+          diff=Path("../docs/uma-f4-2-generated.diff").read_text()
+          assert s.count('panvk_f42_emit("PANVK-F4.1.1')==4
+          assert s.count('panvk_f42_emit("PANVK-F4 submits=')==1
+          assert "G720-UMA-F4.2-LOGCAT-20261016" in s
+          assert "#define KBASE_RINGBUF_SIZE     (1024 * 1024)" in s
+          assert "#define KBASE_TILER_HEAP_RENEW_INTERVAL 256" in s
+          assert "kbase_subqueue_wait_seqno(" in s
+          assert "kbase_renew_tiler_heap(" in s
+          deleted=[l for l in diff.splitlines() if l.startswith("-") and not l.startswith("---")]
+          assert len(deleted)==5 and all('fprintf(stderr, "PANVK-' in x for x in deleted)
+          print("F4.2 only redirects diagnostics, does not modify CSF synchronization")
+          PY
+
       - name: Set up Python and Android SDK/NDK
         uses: actions/setup-python@v5
         with:
@@ -257,19 +282,21 @@ jobs:
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
           meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
 
-      - name: Compile PanVK G720 UMA F4.1.1 Diagnostic Markers
+      - name: Compile PanVK G720 UMA F4.2 Logcat Diagnostics
         working-directory: mesa
         run: |
           set -euo pipefail
           meson compile -C build
 
-      - name: Validate and package UMA F4.1.1 Diagnostic Markers for Bachata
+      - name: Validate and package UMA F4.2 Logcat Diagnostics for Bachata
         run: |
           set -euo pipefail
           SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
           test -s "$SO"
           readelf -h "$SO" | grep -q AArch64
           patchelf --remove-rpath "$SO"
+          readelf -d "$SO" | grep -q liblog.so
+          strings "$SO" | grep -q G720-UMA-F4.2-LOGCAT-20261016
           # Reject incompatible host-OS dependencies before releasing.
           ! readelf -d "$SO" | grep -Eq 'libdrm|libxcb|libX11|libxshmfence'
           ! readelf -d "$SO" | grep -q '(RUNPATH)'
@@ -283,17 +310,19 @@ jobs:
           meta={
             "schemaVersion":1,
             "author":"PanVK G720 Experimental",
-            "description":"UMA F4.1.1 diagnostic early Vulkan queue and sparse CSF markers to stderr; retains UMA F3 baseline; not hardware verified.",
-            "driverVersion":"PanVK G720 beta.2 UMA-F4.1.1-DIAG",
+            "description":"UMA F4.2 diagnostic mirrors F4/F4.1.1 markers to Android Logcat + stderr; F3 preserved, hardware pending.",
+            "diagnosticBuildId":"G720-UMA-F4.2-LOGCAT-20261016",
+            "logcatTag":"PanVK_F42",
+            "driverVersion":"PanVK G720 beta.2 UMA-F4.2-LOGCAT-DIAG",
             "libraryName":"libvulkan_panfrost.so",
             "minApi":35,
-            "name":"PanVK G720 UMA Fase 4.1.1 Marcadores CSF",
-            "packageVersion":"0.1.0-beta.2.uma-f4.1.1-diag",
+            "name":"PanVK G720 UMA Fase 4.2 Logcat",
+            "packageVersion":"0.1.0-beta.2.uma-f4.2-logcat-diag",
             "sanitizedArtifactSha256":sha,
             "vendor":"Mesa"
           }
           (out/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n")
-          archive=out/"PanVK-G720-UMA-F4.1.1-DIAG-Android-ARM64.zip"
+          archive=out/"PanVK-G720-UMA-F4.2-LOGCAT-DIAG-Android-ARM64.zip"
           with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
             for f in ("libvulkan_panfrost.so","meta.json"):
               z.write(out/f,f)
@@ -307,6 +336,6 @@ jobs:
       - name: Upload installable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-UMA-F4.1.1-DIAG-Android-ARM64
-          path: dist/PanVK-G720-UMA-F4.1.1-DIAG-Android-ARM64.zip
+          name: PanVK-G720-UMA-F4.2-LOGCAT-DIAG-Android-ARM64
+          path: dist/PanVK-G720-UMA-F4.2-LOGCAT-DIAG-Android-ARM64.zip
           if-no-files-found: error
