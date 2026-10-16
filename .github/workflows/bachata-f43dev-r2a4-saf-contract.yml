@@ -1,0 +1,136 @@
+name: Bachata F43DEV R2A4 - SAF CLI contract GLIBC
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a4-saf-contract
+    paths:
+      - .github/workflows/bachata-f43dev-r2a4-saf-contract.yml
+      - tools/bachata-r2a4/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  saf-contract-source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native host contract parser tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++23 -O2 -Wall -Wextra -Werror -pedantic \
+            tools/bachata-r2a4/test_saf_cli.cpp -o /tmp/r2a4_cli_tests
+          /tmp/r2a4_cli_tests
+      - name: Pin upstream; apply R2A R2A2 R2A4; negative source guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/bachata-r2 -p 'test_r2a.py' -v
+          g++ -std=c++23 -Wall -Wextra -Werror -pthread \
+            tools/bachata-r2a2/test_host_gate.cpp -o /tmp/r2a2_gate_tests
+          /tmp/r2a2_gate_tests
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 3
+          test -f upstream/src/platform/bachata/f43dev_identity_gate.h
+          test -f upstream/src/platform/bachata/saf_cli_contract.h
+          grep -Fq 'ValidateContractCli' upstream/src/main.cpp
+          grep -Fq 'RedactArgv' upstream/src/main.cpp
+          grep -Fq 'SAF_IO_UNIMPLEMENTED' upstream/src/main.cpp
+          if grep -Eq '^    LOG_INFO\(Debug, "Run: \{\}", std::span\(argv, argc\)\);' \
+             upstream/src/main.cpp; then
+            # Non-managed path intentionally still preserves original argv format;
+            # the guarded ENABLE_BACHATA_RUNTIME path must redact before logging.
+            grep -A6 '#ifdef ENABLE_BACHATA_RUNTIME' upstream/src/main.cpp |
+              grep -q 'RedactArgv'
+          fi
+          git -C upstream diff > r2a4-source.patch
+          cp upstream/src/platform/bachata/f43dev_identity_gate.h R2A2-identity-gate.h
+          cp upstream/src/platform/bachata/saf_cli_contract.h R2A4-saf-cli-contract.h
+          sha256sum r2a4-source.patch R2A2-identity-gate.h R2A4-saf-cli-contract.h > SHA256SUMS.txt
+      - name: Publish source evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a4-saf-cli-source
+          path: |
+            r2a4-source.patch
+            R2A2-identity-gate.h
+            R2A4-saf-cli-contract.h
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  arm64-glibc-fex-r2a4:
+    needs: saf-contract-source-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Basic prerequisites
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Pinned checkout and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Patch R2A Vulkan plus R2A2 host gate plus R2A4 SAF CLI
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 3
+      - name: Debian ARM64 GLIBC cross toolchain
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Build shadPS4 GLIBC FEX and assert ABI/markers
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          grep -aFq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' "$ELF"
+          grep -aFq 'BACHATA_F43DEV_R2A4_CLI_SHAPE_OK_SAF_IO_UNIMPLEMENTED' "$ELF"
+          if grep -Fq 'Shared library: [liblog.so]' ../result/elf-dynamic.txt; then exit 5; fi
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A4-SAF-CLI-CANDIDATE
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A4-SAF-CLI-CANDIDATE > SHA256SUMS.txt)
+          printf 'source=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\npatches=R2A,R2A2,R2A4-cli\nabi=linux-glibc-arm64\nsaf_cli=shape_validation_and_secret_redaction\nsaf_broker_file_io=UNIMPLEMENTED\nsaf_broker_wire_protocol=NOT_VERIFIED\napk_compatible=NOT_VERIFIED\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - name: Publish core-only ELF (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a4-saf-cli-glibc-ELF-CANDIDATE
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
