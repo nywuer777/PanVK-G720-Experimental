@@ -1,9 +1,9 @@
-name: PanVK G720 UMA F4 Diagnostics — Android ARM64
+name: PanVK G720 UMA F4.1 Bachata Diagnostic Export — Android ARM64
 
 on:
   push:
     branches:
-      - exp/uma-inteligente-fase4-diagnostico
+      - exp/uma-inteligente-fase4-1-exportacao
     paths:
       - "vendor/PanVK-G720-UMA-F1-source.zip"
       - "patches/uma-f2-used-range.patch"
@@ -11,6 +11,7 @@ on:
       - "tests/uma-f3-cache-test.c"
       - "patches/uma-f4-csf-profile.patch"
       - "tools/analyze-uma-f4.py"
+      - "tools/uma-f4-1-stderr-relay.py"
       - ".github/workflows/build-uma-f3.yml"
   workflow_dispatch:
 
@@ -126,6 +127,31 @@ jobs:
           PY
           python3 ../tools/analyze-uma-f4.py --self-test
 
+      - name: Route F4 profile snapshots to Bachata-captured stderr (F4.1)
+        working-directory: mesa
+        run: |
+          set -euo pipefail
+          python3 ../tools/uma-f4-1-stderr-relay.py --self-test
+          python3 ../tools/uma-f4-1-stderr-relay.py \
+            --source src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c \
+            --diff ../docs/uma-f4-1-generated.diff
+          python3 - <<'PY'
+          from pathlib import Path
+          source=Path("src/panfrost/vulkan/csf/panvk_vX_gpu_queue.c").read_text()
+          diff=Path("../docs/uma-f4-1-generated.diff").read_text()
+          assert '#include <stdio.h>' in source
+          assert 'fprintf(stderr, "PANVK-F4 submits=' in source
+          assert 'mesa_logi("PANVK-F4 submits=' not in source
+          assert source.count('fflush(stderr);') == 1
+          assert 'PANVK_G720_F4_PROFILE' in source
+          assert '#define KBASE_RINGBUF_SIZE     (1024 * 1024)' in source
+          assert '#define KBASE_TILER_HEAP_RENEW_INTERVAL 256' in source
+          assert 'kbase_subqueue_wait_seqno(' in source
+          assert 'kbase_renew_tiler_heap(' in source
+          assert diff.count('@@') == 8, "Only four guarded hunks expected"
+          print("F4.1: verified stderr relay and preserved F3 CSF scheduling")
+          PY
+
       - name: Set up Python and Android SDK/NDK
         uses: actions/setup-python@v5
         with:
@@ -199,13 +225,13 @@ jobs:
           sed -i 's/#if defined(HAVE_MEMFD_CREATE) \&\& !defined __TERMUX__/#if defined(HAVE_MEMFD_CREATE)/' src/util/anon_file.c
           meson setup build --cross-file android-cross.txt             -Dbuildtype=release -Dplatforms=android             -Dandroid-stub=true -Dandroid-libbacktrace=disabled             -Dplatform-sdk-version=30 -Dglx=disabled -Dgbm=disabled             -Degl=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled             -Dglvnd=disabled -Dvalgrind=disabled -Dgallium-drivers=             -Dshared-glapi=disabled -Dzstd=disabled -Dmesa-clc=system             -Dprecomp-compiler=system -Dvulkan-drivers=panfrost             -Dllvm=disabled -Dpanfrost-kmds=kbase
 
-      - name: Compile PanVK G720 UMA F4 Diagnostics
+      - name: Compile PanVK G720 UMA F4.1 Diagnostic Export
         working-directory: mesa
         run: |
           set -euo pipefail
           meson compile -C build
 
-      - name: Validate and package UMA F4 Diagnostics for Bachata
+      - name: Validate and package UMA F4.1 Diagnostic Export for Bachata
         run: |
           set -euo pipefail
           SO=mesa/build/src/panfrost/vulkan/libvulkan_panfrost.so
@@ -225,17 +251,17 @@ jobs:
           meta={
             "schemaVersion":1,
             "author":"PanVK G720 Experimental",
-            "description":"UMA Fase 4 diagnostic CSF CPU timing on F3 baseline; diagnostic-only, not hardware verified.",
-            "driverVersion":"PanVK G720 beta.2 UMA-F4-DIAG",
+            "description":"UMA F4.1 CPU/CSF diagnostics routed to Bachata-captured stderr; no LADB. Baseline F3 unchanged; not hardware verified.",
+            "driverVersion":"PanVK G720 beta.2 UMA-F4.1-DIAG",
             "libraryName":"libvulkan_panfrost.so",
             "minApi":35,
-            "name":"PanVK G720 UMA Fase 4 Diagnostico CSF",
-            "packageVersion":"0.1.0-beta.2.uma-f4-diag",
+            "name":"PanVK G720 UMA Fase 4.1 Diagnostico sem LADB",
+            "packageVersion":"0.1.0-beta.2.uma-f4.1-diag",
             "sanitizedArtifactSha256":sha,
             "vendor":"Mesa"
           }
           (out/"meta.json").write_text(json.dumps(meta,ensure_ascii=False,indent=2)+"\n")
-          archive=out/"PanVK-G720-UMA-F4-DIAG-Android-ARM64.zip"
+          archive=out/"PanVK-G720-UMA-F4.1-DIAG-Android-ARM64.zip"
           with zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as z:
             for f in ("libvulkan_panfrost.so","meta.json"):
               z.write(out/f,f)
@@ -249,6 +275,6 @@ jobs:
       - name: Upload installable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: PanVK-G720-UMA-F4-DIAG-Android-ARM64
-          path: dist/PanVK-G720-UMA-F4-DIAG-Android-ARM64.zip
+          name: PanVK-G720-UMA-F4.1-DIAG-Android-ARM64
+          path: dist/PanVK-G720-UMA-F4.1-DIAG-Android-ARM64.zip
           if-no-files-found: error
