@@ -49,7 +49,7 @@ inline bool VerifyManagedSocket(const std::filesystem::path& socket,
     auto real_root = std::filesystem::canonical(root, error);
     if (error || !AppPrivatePath(real_root.generic_string())) return false;
     const auto real_parent = std::filesystem::canonical(socket.parent_path(), error);
-    if (error || !InsideRoot(real_parent, real_root)) return false;
+    if (error || (real_parent != real_root && !InsideRoot(real_parent, real_root))) return false;
     struct stat root_st{}, socket_st{};
     if (::stat(real_root.c_str(), &root_st) != 0 || !S_ISDIR(root_st.st_mode) ||
         root_st.st_uid != ::geteuid()) return false;
