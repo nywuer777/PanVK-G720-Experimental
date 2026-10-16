@@ -113,7 +113,7 @@ int IOFile::AdoptReadOnlyFd(int fd, const fs::path& logical_guest_path) {
     if (!path.starts_with("/app0/") || path.size() <= 6 ||
         fs::path(path).lexically_normal().generic_string() != path ||
         path.find("//") != std::string::npos ||
-        path.find_first_of("\r\n\t") != std::string::npos) {
+        path.find_first_of("\\r\\n\\t") != std::string::npos) {
         ::close(fd);
         return EINVAL;
     }
