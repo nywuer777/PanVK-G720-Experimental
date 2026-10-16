@@ -1,0 +1,119 @@
+name: Bachata F43DEV R2A.2 - Host Identity Gate ARM64 GLIBC
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a2-host-gate
+    paths:
+      - .github/workflows/bachata-f43dev-r2a2-host-gate.yml
+      - tools/bachata-r2a2/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-security-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and run host gate unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++23 -Wall -Wextra -Werror -pthread \
+            tools/bachata-r2a2/test_host_gate.cpp -o /tmp/test_host_gate
+          /tmp/test_host_gate
+          python3 -m unittest discover -s tools/bachata-r2 -p 'test_r2a.py' -v
+      - name: Fetch pinned public source and apply R2A then R2A.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 3
+          test -s upstream/src/platform/bachata/f43dev_identity_gate.h
+          grep -Fq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' upstream/src/main.cpp
+          grep -Fq 'image.binding.has_storage' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          (cd upstream && git diff -- src/main.cpp src/video_core/texture_cache/image.h src/video_core/renderer_vulkan/vk_rasterizer.cpp) > R2A2-modified-files.patch
+          cp tools/bachata-r2a2/f43dev_identity_gate.h R2A2-source-header.h
+          sha256sum R2A2-modified-files.patch R2A2-source-header.h > SHA256SUMS.txt
+      - name: Publish reviewable patch (no APK or secret key)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a2-host-gate-source
+          path: |
+            R2A2-modified-files.patch
+            R2A2-source-header.h
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  glibc-arm64-fex:
+    needs: host-security-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install basic build prerequisites
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Clone exact upstream + pinned submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Apply R2A and host-identity patches
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/bachata-r2 -p 'test_r2a.py' -v
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 3
+      - name: Install Debian Trixie AArch64 GLIBC toolchain
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Build host-gated FEX shadPS4
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          if grep -Fq 'Shared library: [liblog.so]' ../result/elf-dynamic.txt; then exit 5; fi
+          grep -aFq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' "$ELF"
+          grep -aFq 'com.bachatas4.android.f43dev' "$ELF"
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A2-HOST-GATED-CANDIDATE
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A2-HOST-GATED-CANDIDATE > SHA256SUMS.txt)
+          printf 'abi=linux-glibc-arm64\nupstream=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\npatches=R2A-mixed-image,R2A2-verified-host-socket\nstatus=ELF_CANDIDATE_NOT_TESTED_ON_DEVICE\nnative_signature_verification=EXISTING_ANDROID_RUNTIME_MUST_REMAIN_INTACT\nruntime_handshake=NOT_TESTED\napk_release=BLOCKED\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - name: Publish ELF candidate ONLY (not a signed APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a2-glibc-host-gated-ELF-CANDIDATE
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
