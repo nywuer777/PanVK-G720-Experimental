@@ -37,13 +37,13 @@ int main() {
     for (const std::string_view path : {
          "/app0/", "/app0//foo", "/app0/./foo", "/app0/../foo",
          "/app0/foo/..", "/app0/foo/.", "/app0/foo//bar",
-         "/app0/file\\name", "/app0/file\nname", "/app0/fo\0o",
+         "/app0/file\\name", "/app0/file\nname", 
          "/app0.evil/file", "/app01/file", "/hostapp/eboot.bin",
          "app0/eboot.bin", "/data/user/0/private"
     }) {
         verify(!mount.Resolve(path));
     }
-    verify(!mount.Resolve(std::string_view("/app0/fo\\0o", 10)));
+    verify(!mount.Resolve(std::string_view("/app0/fo\0o", 10)));
     ReadOnlyMount bad(broker, "games/../../tmp");
     verify(!bad.Resolve("/app0/eboot.bin"));
     ReadOnlyMount bad2(broker, "");
