@@ -1,0 +1,186 @@
+name: Bachata F43DEV R2A5 - BSF1 client linked GLIBC FEX (no VFS mount)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a5-bsf1-client
+    paths:
+      - .github/workflows/bachata-f43dev-r2a5-bsf1-client.yml
+      - tools/bachata-r2a5/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r2a5-source-host-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify original R2A5/P1 source hashes (not edited)
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '%s\n' \
+            'cc30a3dc5f805a2a008ccbe166e0f032a812157b872d03a9239f8e04dff18795  tools/bachata-r2a5/saf_bsf1_client.h' \
+            '693520942c8f4bfc4bc3a8726f727a986a144fb3e40721b39a5f10a87f3142cf  tools/bachata-r2a5/saf_bsf1_client.cpp' \
+            '14e17fe203e2952e161f9d0f8814298b28e239b4d2bf38344d5c4b2698bc3485  tools/bachata-r2a5/test_bsf1_mock.cpp' |
+            sha256sum --check
+      - name: Run all 33 synthetic AF_UNIX mock checks on native host
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 tools/bachata-r2a5/test_bsf1_mock.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a5-test
+          /tmp/r2a5-test | tee /tmp/r2a5-normal.log
+          grep -Fq 'R2A5_MOCK_BROKER_TESTS_PASS count=33' /tmp/r2a5-normal.log
+      - name: R2A5 native AddressSanitizer and UndefinedBehaviorSanitizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Itools/bachata-r2a5 tools/bachata-r2a5/test_bsf1_mock.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a5-asan
+          ASAN_OPTIONS=detect_leaks=1 /tmp/r2a5-asan | tee /tmp/r2a5-asan.log
+          grep -Fq 'R2A5_MOCK_BROKER_TESTS_PASS count=33' /tmp/r2a5-asan.log
+      - name: Pin source and apply R2A R2A2 R2A4 R2A5
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 -m unittest discover -s tools/bachata-r2 -p test_r2a.py -v
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 4
+          grep -Fq 'src/platform/bachata/saf_bsf1_client.cpp' upstream/CMakeLists.txt
+          grep -Fq 'BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED' upstream/src/main.cpp
+          test -s upstream/src/platform/bachata/saf_bsf1_client.cpp
+          git -C upstream diff -- CMakeLists.txt src/main.cpp \
+            src/video_core/texture_cache/image.h \
+            src/video_core/renderer_vulkan/vk_rasterizer.cpp > R2A5-reviewed-source.patch
+          sha256sum R2A5-reviewed-source.patch > SHA256SUMS.txt
+      - name: Upload reproducible source patch and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a5-BSF1-source-audited-not-APK
+          path: |
+            R2A5-reviewed-source.patch
+            SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  r2a5-linux-arm64-object:
+    needs: r2a5-source-host-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM64 Linux GLIBC cross compiler
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Compile and link client as Linux GLIBC AArch64 test library
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -fPIC -shared \
+            -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 tools/bachata-r2a5/saf_bsf1_client.cpp \
+            -o result/libbachata_bsf1_linux_glibc_arm64_TEST_ONLY.so
+          readelf -h result/libbachata_bsf1_linux_glibc_arm64_TEST_ONLY.so > result/elf-header.txt
+          readelf -d result/libbachata_bsf1_linux_glibc_arm64_TEST_ONLY.so > result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' result/elf-header.txt
+          if grep -Fq 'Shared library: [liblog.so]' result/elf-dynamic.txt; then exit 9; fi
+          sha256sum result/libbachata_bsf1_linux_glibc_arm64_TEST_ONLY.so > result/SHA256SUMS.txt
+          printf 'standalone_transport=COMPILED_NOT_ANDROID_VALIDATED\nvfs_mount=DISABLED\nreal_broker=NOT_TESTED\n' > result/PROVENANCE.txt
+      - name: Upload cross-compiled transport test library (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a5-AArch64-GLIBC-transport-test-only
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
+
+  r2a5-glibc-fex-core:
+    needs: [r2a5-source-host-tests, r2a5-linux-arm64-object]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install pinned Debian source tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Fetch pinned public shadPS4 candidate + recursive submodules
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Apply all pinned source patches including BSF1 transport
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 4
+      - name: Install cross-compile dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Build patched Linux ARM64 GLIBC FEX shadPS4 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          if grep -Fq 'Shared library: [liblog.so]' ../result/elf-dynamic.txt; then exit 5; fi
+          grep -aFq 'BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED' "$ELF"
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A5-BSF1-LINKED-CANDIDATE
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A5-BSF1-LINKED-CANDIDATE > SHA256SUMS.txt)
+          printf 'source=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\npatches=R2A,R2A2,R2A4,R2A5\nabi=linux-glibc-arm64\nbsf1_transport=COMPILED_AND_LINKED\nsaf_vfs_mount=DISABLED\nreal_android_broker=NOT_TESTED\napk_compatible=NOT_VERIFIED\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - name: Upload core-only candidate (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a5-glibc-fex-BSF1-LINKED-VFS-DISABLED
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
