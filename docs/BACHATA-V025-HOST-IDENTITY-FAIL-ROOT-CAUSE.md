@@ -1,5 +1,8 @@
 # Bachata v0.2.5 — host identity check failed: root-cause audit
 
+> **CORREÇÃO DE PROVENIÊNCIA — 2026-10-16:** O usuário esclareceu que o erro `IllegalStateException: host identity check failed` da captura ocorreu no APK **experimental modificado** `Bachata-S4-0.2.5-BCn-hotfix-EXPERIMENTAL.apk` preparado numa outra conversa em 2026-10-15, e **não no APK oficial** v0.2.5. Naquela conversa o APK experimental foi reassinado com certificado diferente (fingerprint prefix `82ce012e…5e7404` versus o oficial `a1d6e9aa…25761ee`) e seu verificador nativo rejeitou essa identidade. O reparo separado `Bachata-S4-0.2.5-BCn-hostfix-EXPERIMENTAL.apk` passou em verificações estáticas, mas não havia validação de execução no dispositivo. A hipótese de falha de descoberta do caminho do APK **não tem evidência para explicar essa imagem**; quaisquer especulações anteriores sobre falha no APK oficial estão superadas. A verificação LADB do SHA-256 do APK oficial instalado se refere a uma instalação distinta/retornada ao original, não identifica o APK usado no crash experimental.
+
+
 2026-10-16. Static inspection ONLY of user-provided unmodified `bachatas4-0.2.5-release.apk`, SHA-256 `1df49463f396df8b6f042230bdc1bb9f948b8e69894c378915920875c40ab0ee` (matches release SHA256SUMS.txt).
 
 ## Observation
