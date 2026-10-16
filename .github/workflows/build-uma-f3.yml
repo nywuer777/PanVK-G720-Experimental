@@ -148,7 +148,9 @@ jobs:
           assert '#define KBASE_TILER_HEAP_RENEW_INTERVAL 256' in source
           assert 'kbase_subqueue_wait_seqno(' in source
           assert 'kbase_renew_tiler_heap(' in source
-          assert diff.count('@@') == 8, "Only four guarded hunks expected"
+          additions=[x for x in diff.splitlines() if x.startswith("+") and not x.startswith("+++")]
+          removals=[x for x in diff.splitlines() if x.startswith("-") and not x.startswith("---")]
+          assert len(additions) == 4 and len(removals) == 2, "Unexpected changes in relay diff"
           print("F4.1: verified stderr relay and preserved F3 CSF scheduling")
           PY
 
