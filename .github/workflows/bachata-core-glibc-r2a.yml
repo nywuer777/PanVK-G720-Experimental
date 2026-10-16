@@ -1,0 +1,105 @@
+name: Bachata F43DEV R2A - mixed Vulkan image access ARM64 GLIBC
+
+on:
+  push:
+    branches:
+      - exp/bachata-core-glibc-r2a-mixed-image
+    paths:
+      - .github/workflows/bachata-core-glibc-r2a.yml
+      - tools/bachata-r2/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  r2a-source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run source invariant and regression tests
+        run: python3 -m unittest discover -s tools/bachata-r2 -p 'test_r2a.py' -v
+      - name: Verify exact pinned upstream and apply guarded patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          git -C upstream diff --check
+          git -C upstream diff --stat
+          test "$(git -C upstream diff --name-only | wc -l)" = 2
+          grep -q 'has_storage' upstream/src/video_core/texture_cache/image.h
+          grep -q 'use_feedback_layout' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          git -C upstream diff -- src/video_core/texture_cache/image.h src/video_core/renderer_vulkan/vk_rasterizer.cpp > R2A-source.patch
+      - name: Upload source diff for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a-source-diff
+          path: R2A-source.patch
+          if-no-files-found: error
+          retention-days: 14
+
+  arm64-glibc-candidate-r2a:
+    needs: r2a-source-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install basic tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Fetch exact source and all submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Apply exact R2A patch and tests
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/bachata-r2 -p 'test_r2a.py' -v
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 2
+      - name: Install Debian ARM64 GLIBC cross toolchain
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Build FEXCore and patched shadPS4 ARM64 GLIBC
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          if grep -Fq 'Shared library: [liblog.so]' ../result/elf-dynamic.txt; then
+            echo "Unexpected Android/Bionic dependency"; exit 5
+          fi
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A-CANDIDATE
+          git diff -- src/video_core/texture_cache/image.h src/video_core/renderer_vulkan/vk_rasterizer.cpp > ../result/R2A-source.patch
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A-CANDIDATE R2A-source.patch > SHA256SUMS.txt)
+          printf 'source_commit=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\npatch=R2A-mixed-image-access\nabi=linux-glibc-arm64\nstatus=COMPILED_NOT_TESTED_ON_DEVICE\napk_compatible=NOT_VERIFIED\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - name: Upload patched ELF candidate (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a-glibc-mixed-image-CANDIDATE
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
