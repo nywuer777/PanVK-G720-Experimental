@@ -1,0 +1,193 @@
+name: Bachata F43DEV R2A6 P5 - exact V2 host HELLO contract (not APK)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p5-host-contract-v2-fix
+    paths:
+      - tools/bachata-r2a6p5/**
+      - .github/workflows/bachata-f43dev-r2a6p5-host-v2-hello.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-v2-protocol-and-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Exact lowercase V2 contract HELLO regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic \
+            -Itools/bachata-r2a6p5 tools/bachata-r2a6p5/test_f43dev_contract_v2.cpp \
+            -o /tmp/r2a6p5-tests
+          /tmp/r2a6p5-tests | tee /tmp/r2a6p5-test.log
+          grep -Fq 'R2A6P5_V2_HELLO_TESTS_PASS count=25' /tmp/r2a6p5-test.log
+      - name: AddressSanitizer / UndefinedBehaviorSanitizer V2 framing
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Itools/bachata-r2a6p5 tools/bachata-r2a6p5/test_f43dev_contract_v2.cpp \
+            -o /tmp/r2a6p5-tests-asan
+          ASAN_OPTIONS=detect_leaks=1 /tmp/r2a6p5-tests-asan |
+            tee /tmp/r2a6p5-test-asan.log
+          grep -Fq 'R2A6P5_V2_HELLO_TESTS_PASS count=25' /tmp/r2a6p5-test-asan.log
+      - name: Synthetic DEX contract audit and R2A6P3 evidence checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/bachata-r2a6p4 \
+            -p 'test_audit_host_contract.py' -v
+          python3 -m unittest discover -s tools/bachata-r2a6p3 \
+            -p 'test_device_evidence.py' -v
+      - name: Clone pinned shadPS4 and integrate complete R2A patch chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          python3 tools/bachata-r2a6p1/apply_r2a6p1.py upstream
+          python3 tools/bachata-r2a6p2/apply_r2a6p2.py upstream
+          python3 tools/bachata-r2a6p5/apply_r2a6p5.py upstream
+          git -C upstream diff --check
+          grep -Fq 'SendHelloV2' upstream/src/main.cpp
+          grep -Fq 'VerifyPeer' upstream/src/main.cpp
+          grep -Fq 'ContractV2::ValidNonce' upstream/src/main.cpp
+          grep -Fq 'SendHelloV2' upstream/src/platform/bachata/runtime_client.cpp
+          grep -Fq 'SendHelloV2' upstream/src/platform/bachata/runtime_client.h
+          grep -Fq 'BACHATA/1 HELLO version=2 contract=' upstream/src/platform/bachata/f43dev_contract_v2.h
+          ! grep -Fq 'BACHATA/1 HELLO version=2 contract=' upstream/src/platform/bachata/runtime_client.cpp
+          git -C upstream diff -- CMakeLists.txt src/main.cpp src/platform/bachata/runtime_client.cpp \
+            src/platform/bachata/runtime_client.h src/video_core/texture_cache/image.h \
+            src/video_core/renderer_vulkan/vk_rasterizer.cpp \
+            src/common/io_file.cpp src/common/io_file.h \
+            src/core/file_sys/fs.cpp src/core/libraries/kernel/file_system.cpp \
+            > R2A6P5-reviewed-sources.patch
+          sha256sum R2A6P5-reviewed-sources.patch > SHA256SUMS.txt
+          printf 'apk_not_modified=YES\nandroid_broker_not_tested=YES\nnonce_lowercase_hex32=ENFORCED\nhello_v2=EXACT\nhost_uid_verification=PRESERVED\n' > R2A6P5-PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p5-host-V2-source-proof-NOT-APK
+          path: |
+            R2A6P5-reviewed-sources.patch
+            R2A6P5-PROVENANCE.txt
+            SHA256SUMS.txt
+            tools/bachata-r2a6p5/f43dev_contract_v2.h
+            tools/bachata-r2a6p5/apply_r2a6p5.py
+            tools/bachata-r2a6p5/test_f43dev_contract_v2.cpp
+          if-no-files-found: error
+          retention-days: 14
+
+  glibc-arm64-hello-object:
+    needs: host-v2-protocol-and-source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GCC AArch64 GLIBC
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Cross-compile strict V2 frame regression program
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic \
+            -Itools/bachata-r2a6p5 tools/bachata-r2a6p5/test_f43dev_contract_v2.cpp \
+            -o result/bachata-r2a6p5-hello-arm64-TEST-ONLY
+          readelf -h result/bachata-r2a6p5-hello-arm64-TEST-ONLY > result/elf-header.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' result/elf-header.txt
+          (cd result && sha256sum bachata-r2a6p5-hello-arm64-TEST-ONLY > SHA256SUMS.txt)
+          printf 'target=Linux AArch64 GLIBC\nsigning=NONE\nandroid=NOT_TESTED\n' > result/PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p5-hello-arm64-GLIBC-test-only
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
+
+  full-glibc-fex-candidate:
+    needs: [host-v2-protocol-and-source, glibc-arm64-hello-object]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Initial system packages
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Pinned upstream and recursive FEXCore submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Exact patch chain R2A through R2A6P5 host V2
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          python3 tools/bachata-r2a6p1/apply_r2a6p1.py upstream
+          python3 tools/bachata-r2a6p2/apply_r2a6p2.py upstream
+          python3 tools/bachata-r2a6p5/apply_r2a6p5.py upstream
+          git -C upstream diff --check
+      - name: Install Linux ARM64 Debian runtime dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Build full glibc FEX shadPS4 candidate, check V2 marker and ABI
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          grep -aFq 'BACHATA/1 HELLO version=2 contract=' "$ELF"
+          grep -aFq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' "$ELF"
+          grep -aFq 'BSF1_LAB_PROBE_FILE_OK' "$ELF"
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A6P5-HOST-V2-FEX-EXPERIMENTAL
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A6P5-HOST-V2-FEX-EXPERIMENTAL > SHA256SUMS.txt)
+          printf 'source=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\nlinux_arm64_glibc=YES\nnative_android_apk=NO\nf43dev_v2_hello=COMPILED\nsigning_enforced_by_host=NOT_TESTED\nreal_android_broker=NOT_TESTED\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p5-host-V2-glibc-FEX-EXPERIMENTAL-NOT-APK
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
