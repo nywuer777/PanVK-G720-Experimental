@@ -1,0 +1,123 @@
+name: P39 exact same-ImageId sampled-storage GENERAL layout (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p39-apk-compat-elf]
+    paths:
+      - 'tools/bachata-p39/**'
+      - '.github/workflows/bachata-f43dev-p39-same-image-layout.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack pinned source chain
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          echo '9614c70a68c7257c8ba6c64ebfeaf3aeb2bc25878397714539621886761d0eb2  tools/bachata-p39/source-delta.tar.xz' | sha256sum -c -
+          mkdir kit
+          for p in tools/bachata-p36/source-kit.tar.xz tools/bachata-p37/source-delta.tar.xz tools/bachata-p38/source-delta.tar.xz tools/bachata-p39/source-delta.tar.xz; do tar -xJf "$p" -C kit; done
+      - name: P33-P39 Python source port regression suite
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest discover -s . -p 'test_port_p3*.py' -v
+      - name: P39 C++ layout gate with GCC Clang ASan UBSan
+        run: |
+          set -euo pipefail
+          cd kit/source
+          g++ -std=c++20 -Wall -Wextra -Werror -pedantic -O2 -I. test_p39.cpp -o /tmp/p39_layout
+          /tmp/p39_layout
+          clang++ -std=c++20 -Wall -Wextra -Werror -pedantic -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p39.cpp -o /tmp/p39_sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p39_sanitized
+      - name: Apply pinned public source and confirm live descriptor path
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p39.py --source-root upstream --out p39-port.diff --write > p39-port.json
+          git -C upstream diff --check
+          grep -Fq 'P39_EXACT_IMAGE_ID_SAMPLED_STORAGE' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'p39_image.binding.force_general = 1u' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'vk::AccessFlagBits2::eShaderWrite' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'BACHATA_P39_SAME_IMAGE_LAYOUT' upstream/src/video_core/renderer_vulkan/p39_same_image_layout.hpp
+          grep -Fq 'P38_INTERDISPATCH_SHADER_IMAGE_BARRIER' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'P37_IR_BASIC_BLOCK_SEQUENCE' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'P26_ALIAS_POLICY' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p39-compat-source-preflight-NOT-APK
+          path: |
+            p39-port.diff
+            p39-port.json
+          retention-days: 14
+          if-no-files-found: warn
+  glibc-arm64:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install bootstrap tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Restore exact pinned P36.2-P39 sources
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          echo '9614c70a68c7257c8ba6c64ebfeaf3aeb2bc25878397714539621886761d0eb2  tools/bachata-p39/source-delta.tar.xz' | sha256sum -c -
+          mkdir kit
+          for p in tools/bachata-p36/source-kit.tar.xz tools/bachata-p37/source-delta.tar.xz tools/bachata-p38/source-delta.tar.xz tools/bachata-p39/source-delta.tar.xz; do tar -xJf "$p" -C kit; done
+      - name: Clone public source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then exit 3; fi
+      - name: Install Debian AArch64 GLIBC dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Apply P39 and compile complete public AArch64 GLIBC core
+        run: |
+          set -euo pipefail
+          mkdir -p p39-build
+          python3 kit/source/port_renderer_p39.py --source-root upstream --out p39-build/p39-port.diff --write > p39-build/apply.json
+          git -C upstream diff --check
+          ( cd upstream && bash runtime/scripts/build-shadps4-arm64.sh ) >p39-build/build.log 2>&1 || { tail -180 p39-build/build.log; exit 1; }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" >p39-build/elf-header.txt
+          readelf -l "$elf" >p39-build/elf-program.txt
+          readelf -d "$elf" >p39-build/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p39-build/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p39-build/elf-program.txt
+          sha256sum "$elf" >p39-build/SHA256SUMS.txt
+          cp "$elf" p39-build/shadps4-arm64-P39
+          printf '%s\n' 'PUBLIC_CORE_AARCH64_GLIBC=YES' 'EXACT_SAME_IMAGE_ID_LAYOUT_OPTIN=YES' 'EXACT_SAME_IMAGE_ID_LAYOUT_DEFAULT=OFF' 'DISTINCT_IMAGE_ALIAS_FIXED=NO' 'INTRASHADER_HAZARD_FIXED=NO' 'ROBUST_IMAGE_BLOCKER_REMOVED=NO' 'MINECRAFT_FIXED=NO' 'OUTLAST_FIXED=NO' 'F43DEV_HOST_IDENTITY_NOT_PROVEN=YES' 'APK_BUILT=NO' >p39-build/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p39-actual-ELF-for-compatibility-TEST-NOT-APK
+          path: |
+            p39-build/
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
