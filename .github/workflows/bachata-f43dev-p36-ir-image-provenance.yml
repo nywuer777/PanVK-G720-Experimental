@@ -1,0 +1,113 @@
+name: P36 shader IR image access provenance ARM64 GLIBC (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p36-ir-image-provenance]
+    paths:
+      - 'tools/bachata-p36/**'
+      - '.github/workflows/bachata-f43dev-p36-ir-image-provenance.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify input source package
+        run: |
+          set -euo pipefail
+          echo 'c72ccde27d211744183e8ba1cababc2d0a291b6271bbad5e60686be0d28f7b88  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          mkdir kit && tar -xJf tools/bachata-p36/source-kit.tar.xz -C kit
+      - name: Run provenance and complete P33-P36 Python regression
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest discover -s . -p 'test_port_p3*.py' -v
+      - name: Run C++ policy tests under GCC and Clang sanitizers
+        run: |
+          set -euo pipefail
+          cd kit/source
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. test_p36.cpp -o /tmp/p36
+          /tmp/p36
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p36.cpp -o /tmp/p36san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p36san
+      - name: Patch exact pinned source and verify active shader resource flow
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p36.py --source-root upstream --out p36.diff --write > p36-preflight.json
+          git -C upstream diff --check
+          grep -Fq 'image.is_read |= desc.is_read' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'image.is_sampled |= desc.is_sampled' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'inst.GetOpcode() == IR::Opcode::ImageRead || is_atomic' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'P36_SHADER_OPCODE_PROVENANCE' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p36-shader-access-source-preflight-NOT-APK
+          path: |
+            p36.diff
+            p36-preflight.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  glibc-aarch64:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+    timeout-minutes: 120
+    steps:
+      - name: Bootstrap Debian builder
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Verify and unpack source-only P36
+        run: |
+          set -euo pipefail
+          echo 'c72ccde27d211744183e8ba1cababc2d0a291b6271bbad5e60686be0d28f7b88  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          mkdir kit && tar -xJf tools/bachata-p36/source-kit.tar.xz -C kit
+      - name: Download exact public source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then exit 3; fi
+      - name: Install GLIBC AArch64 build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Apply P36 and compile ARM64 GLIBC core
+        run: |
+          set -euo pipefail
+          mkdir -p p36-build
+          python3 kit/source/port_renderer_p36.py --source-root upstream --out p36-build/p36.diff --write > p36-build/apply.json
+          git -C upstream diff --check
+          ( cd upstream && bash runtime/scripts/build-shadps4-arm64.sh ) > p36-build/build.log 2>&1 || { tail -160 p36-build/build.log; exit 1; }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" > p36-build/elf-header.txt
+          readelf -l "$elf" > p36-build/elf-program.txt
+          readelf -d "$elf" > p36-build/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p36-build/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p36-build/elf-program.txt
+          sha256sum "$elf" > p36-build/SHA256SUMS.txt
+          printf '%s\n' 'P36_SHADER_OPCODE_DIAGNOSTICS_PUBLIC_SOURCE=YES' 'GLIBC_ELF_COMPILED=YES' 'PRIVATE_F43DEV_HOST_COMPATIBILITY=NOT_TESTED' 'MINECRAFT_FIXED=NO' 'OUTLAST_FIXED=NO' 'APK_BUILT=NO' > p36-build/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p36-public-glibc-aarch64-evidence-NOT-APK
+          path: |
+            p36-build/
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
