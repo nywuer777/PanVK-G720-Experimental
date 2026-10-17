@@ -1,0 +1,110 @@
+name: P35 Minecraft image-alias intent diagnostics - public AArch64 GLIBC (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p35-minecraft-alias-intent]
+    paths:
+      - 'tools/bachata-p35/**'
+      - '.github/workflows/bachata-f43dev-p35-alias-intent.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: SHA256 gate and unpack public-only sources
+        run: |
+          set -euo pipefail
+          echo '8135c79a0665921ddbf411b473a267dd911825a983778a9e4025ca2eebe7b3a4  tools/bachata-p35/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          tar -xJf tools/bachata-p35/source-kit.tar.xz -C kit
+      - name: P35 alias intent native Python and C++ tests
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest discover -s . -p 'test_port_p3*.py' -q
+          g++ -std=c++20 -Wall -Wextra -Werror -O2 -I. test_p35.cpp -o /tmp/p35-intent
+          /tmp/p35-intent
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p35.cpp -o /tmp/p35-intent-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p35-intent-san
+      - name: Real pinned upstream source application, source diff and identity gate
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p35.py --source-root upstream --out p35-port.diff --write > p35-preflight.json
+          git -C upstream diff --check
+          grep -Fq 'P35_ALIAS_ACTIVE_BINDTEXTURES' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'stage.uses_image_atomic_float_min_max' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'VideoCore::StagingVerbose()' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'P25 decoded BCn sampled view blocked' upstream/src/video_core/texture_cache/image_view.cpp
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p35-source-preflight-privacy-safe-NOT-APK
+          path: |
+            p35-port.diff
+            p35-preflight.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  glibc-arm64:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Bootstrap Debian builder
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Restore SHA256-verified source kit
+        run: |
+          set -euo pipefail
+          echo '8135c79a0665921ddbf411b473a267dd911825a983778a9e4025ca2eebe7b3a4  tools/bachata-p35/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          tar -xJf tools/bachata-p35/source-kit.tar.xz -C kit
+      - name: Clone exact public core with all recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then exit 3; fi
+      - name: Install GLIBC AArch64 build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Apply P35 and compile complete ARM64 GLIBC ELF
+        run: |
+          set -euo pipefail
+          mkdir -p p35-build
+          python3 kit/source/port_renderer_p35.py --source-root upstream --out p35-build/p35-port.diff --write > p35-build/apply.json
+          git -C upstream diff --check
+          ( cd upstream && bash runtime/scripts/build-shadps4-arm64.sh ) >p35-build/build.log 2>&1 || { tail -180 p35-build/build.log; exit 1; }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" >p35-build/elf-header.txt
+          readelf -l "$elf" >p35-build/elf-program.txt
+          readelf -d "$elf" >p35-build/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p35-build/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p35-build/elf-program.txt
+          sha256sum "$elf" >p35-build/SHA256SUMS.txt
+          printf '%s\n' 'P35_PUBLIC_CORE_BUILD_CANDIDATE_ONLY' 'NO_GAME_ADDRESSES_LOGGED' 'F43DEV_HOST_COMPATIBILITY_NOT_PROVEN' 'OUTLAST_NOT_VERIFIED' 'MINECRAFT_NOT_FIXED' 'APK_NOT_BUILT' >p35-build/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p35-public-AArch64-GLIBC-build-evidence-NOT-APK
+          path: |
+            p35-build/
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
