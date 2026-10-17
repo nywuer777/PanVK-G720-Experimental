@@ -1,0 +1,55 @@
+name: Bachata F43DEV R2A6 P8 - read-only JNI DEX callsite trace
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p8-jni-callsite-trace
+    paths:
+      - tools/bachata-r2a6p8/**
+      - .github/workflows/bachata-f43dev-r2a6p8-jni-callsite.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dex-callsite-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: 30 synthetic DEX and Dalvik instruction regression checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/bachata-r2a6p8/audit_callsite.py
+          python3 -m unittest discover \
+            -s tools/bachata-r2a6p8 -p test_callsite.py -v
+          python3 tools/bachata-r2a6p8/audit_callsite.py --help >/dev/null
+      - name: Publish code for independent local verification against pinned V2
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cp tools/bachata-r2a6p8/audit_callsite.py result/
+          cp tools/bachata-r2a6p8/test_callsite.py result/
+          cat > result/PROVENANCE.txt <<'EOF'
+          PHASE=R2A.6/P8
+          SOURCE=EXACT_PINNED_F43DEV_V2_DEX_ONLY
+          CI_APK_ATTACHED=NO
+          CI_INPUTS=SYNTHETIC
+          PRIVATE_ANDROID_CODE_UPLOADED=NO
+          DEX_INVOCATION_AND_REGISTER_ORIGINS=STATIC_ONLY
+          JNI_RUN_ARGUMENT_VALUES=NOT_CAPTURED
+          ANDROID_HOST_SOURCE=NOT_AVAILABLE
+          APK_SIGNING=NOT_PERFORMED
+          REAL_ANDROID_BROKER=NOT_TESTED
+          PANVK_AND_FUNCTIONAL_V2=UNCHANGED
+          EOF
+          (cd result && sha256sum audit_callsite.py test_callsite.py PROVENANCE.txt > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p8-dex-jni-callsite-source-NOT-APK
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
