@@ -186,13 +186,22 @@ def audit_dex(data):
         (v[1]=="run" and v[2]==RUN) or (v[1]=="stop" and v[2]=="()V"))}
     if len(ids)!=2 or set(ids.values())!={"run","stop"}:
         raise ValueError("JNI_METHODS_NOT_UNIQUE")
-    results=[];count=0
+    constructors={i for i,method in enumerate(methods)
+                  if method[0]=="Lp42;" and method[1]=="<init>" and
+                  method[2]=="(Landroid/os/ParcelFileDescriptor;Lcom/bachatas4/android/runtime/process/NativeRuntimeService;Landroid/view/Surface;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Lq42;Lsc1;Lh42;)V"}
+    if len(constructors)!=1:raise ValueError("JNI_RUNNER_CONSTRUCTOR_NOT_UNIQUE")
+    results=[];constructor_sites=[];count=0
     for owner,words in enumerate_bodies(data,types,methods):
         count+=1
         i=0
         while i<len(words):
             op=words[i]&255;size=instructions(words,i)
             if size<=0 or i+size>len(words):raise ValueError("INSN_BOUNDS")
+            if op in (0x70,0x76) and words[i+1] in constructors:
+                constructor_sites.append({"caller_class":owner[0],
+                    "caller_method":owner[1],"caller_descriptor":owner[2],
+                    "argument_words":words[i]>>8 if op==0x76 else words[i]>>12,
+                    "invoke_range":op==0x76})
             if op in (0x71,0x77) and words[i+1] in ids:
                 idx=words[i+1]
                 row={"native":ids[idx],"caller_class":owner[0],
@@ -207,6 +216,12 @@ def audit_dex(data):
             "run_callsite_count":sum(r["native"]=="run" for r in results),
             "stop_callsite_count":sum(r["native"]=="stop" for r in results),
             "dex_method_bodies_scanned":count,
+            "runner_constructor_callsites":constructor_sites,
+            "runner_constructor_chain_confirmed":len(constructor_sites)==1 and
+                constructor_sites[0]["caller_class"]=="Lq42;" and
+                constructor_sites[0]["caller_method"]=="c" and
+                constructor_sites[0]["argument_words"]==10 and
+                constructor_sites[0]["invoke_range"],
             "callsites":results,"real_device_test":False,
             "jni_parameter_meaning_completely_known":False,
             "apk_signature_verified":False,"saf_broker_verified":False,
