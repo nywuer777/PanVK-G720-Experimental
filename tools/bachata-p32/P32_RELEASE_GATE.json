@@ -1,0 +1,28 @@
+{
+  "alias_classifier_calls_in_patch": 1,
+  "alias_memory_order_fix_present": false,
+  "alias_policy_diagnostic_only": true,
+  "baseline_p23_sha256_expected": "2806f93e9f4346dda5c796462c3d916fb021e2dc942fa2e7366dc78c265c62b6",
+  "bcn_external_calls_in_p30_patch": [],
+  "bcn_external_callsite_count": 0,
+  "bcn_renderer_integration_eligible": false,
+  "candidate_approved_for_apk": false,
+  "f43dev_apk_untouched": true,
+  "glibc_aarch64_compiled": true,
+  "minecraft_fixed": false,
+  "outlast_fixed": false,
+  "p27_decoder_present_in_build": true,
+  "p28_async_adapter_present_in_build": true,
+  "p30_public_elf_sha256": "ab6bebe0930b14e96d999c64aa686f9f051979ec7d0790ed6c64b0d66a78f758",
+  "reasons": [
+    "BCN_NO_MAIN_RENDERER_CALLSITE",
+    "TEXTURE_REFRESH_PATH_UNCHANGED",
+    "ALIAS_POLICY_DIAGNOSTIC_ONLY",
+    "ALIAS_SHADER_ORDERING_NOT_IMPLEMENTED",
+    "F43DEV_PRIVATE_RUNTIME_SOURCE_NOT_MATCHED"
+  ],
+  "release_gate": "BLOCKED",
+  "schema": "bachata-p32-active-path-gate-v1",
+  "source_revision": "be6bc2e9c60799e071dd2fafa6216e8d80ec619c",
+  "texture_cache_refresh_path_modified": false
+}
