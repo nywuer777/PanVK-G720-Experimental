@@ -1,0 +1,122 @@
+name: P34 public-core 1D-tiled BCn GPU detile-readback candidate (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p34-tiled-bcn-detile]
+    paths:
+      - 'tools/bachata-p34/**'
+      - '.github/workflows/bachata-f43dev-p34-tiled-bcn.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify and unpack source-only P34 kit
+        run: |
+          set -euo pipefail
+          echo 'd3460d8ffb1b5cf88b4c99de037b0f8e7eddf6c73936db102bf6931c7e2f6885  tools/bachata-p34/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          tar -xJf tools/bachata-p34/source-kit.tar.xz -C kit
+          test -f kit/source/port_renderer_p34.py
+      - name: Portable C++ and Python regression gates
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest -v test_port_p34.py
+          g++ -std=c++20 -Wall -Wextra -Werror -O2 -I. test_p34.cpp -o /tmp/p34-policy
+          /tmp/p34-policy
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p34.cpp -o /tmp/p34-policy-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p34-policy-san
+      - name: Apply pinned active tiled BCn source port
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p34.py --source-root upstream --out p34-port.diff --write > p34-preflight.json
+          git -C upstream diff --check
+          grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'tile_manager.DetileImage(' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'P34_BCN_1D_TILED_RGBA_SELECTED' upstream/src/video_core/texture_cache/image.cpp
+          grep -Fq 'P26_ALIAS_POLICY' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'P25 decoded BCn sampled view blocked' upstream/src/video_core/texture_cache/image_view.cpp
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p34-source-preflight-NOT-APK
+          path: |
+            p34-port.diff
+            p34-preflight.json
+          retention-days: 14
+          if-no-files-found: warn
+  glibc-aarch64:
+    needs: source-preflight
+    runs-on: ubuntu-24.04
+    container:
+      image: debian:trixie
+    timeout-minutes: 120
+    steps:
+      - name: Bootstrap
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Unpack verified source kit
+        run: |
+          set -euo pipefail
+          echo 'd3460d8ffb1b5cf88b4c99de037b0f8e7eddf6c73936db102bf6931c7e2f6885  tools/bachata-p34/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          tar -xJf tools/bachata-p34/source-kit.tar.xz -C kit
+      - name: Clone exact source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then exit 3; fi
+      - name: Install Debian AArch64 cross-build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Apply P34 port and cross-compile shadPS4 ARM64 GLIBC
+        run: |
+          set -euo pipefail
+          mkdir -p p34-result
+          python3 kit/source/port_renderer_p34.py --source-root upstream --out p34-result/p34-port.diff --write > p34-result/port-result.json
+          git -C upstream diff --check
+          (
+            cd upstream
+            bash runtime/scripts/build-shadps4-arm64.sh
+          ) > p34-result/build.log 2>&1 || {
+            tail -180 p34-result/build.log
+            exit 1
+          }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" > p34-result/elf-header.txt
+          readelf -l "$elf" > p34-result/elf-program.txt
+          readelf -d "$elf" > p34-result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p34-result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p34-result/elf-program.txt
+          sha256sum "$elf" > p34-result/SHA256SUMS.txt
+          printf '%s\n' \
+            'PUBLIC_CORE_SOURCE_ONLY=YES' \
+            'F43DEV_HOST_IDENTITY_VERIFIED=NO' \
+            'OUTLAST_FIXED=NO' \
+            'MINECRAFT_FIXED=NO' \
+            'P34_BLOCKING_READBACK=YES' \
+            'APK_BUILT=NO' > p34-result/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p34-aarch64-glibc-build-evidence-NOT-APK
+          path: |
+            p34-result/
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
