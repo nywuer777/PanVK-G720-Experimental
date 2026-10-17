@@ -1,0 +1,33 @@
+name: Bachata F43DEV host identity gate source tests
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/bachata-hostid/**"
+      - ".github/actions/bachata-host-identity-gate/**"
+      - ".github/workflows/bachata-host-identity-source-ci.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  gate-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate fail-closed APK host identity checker source
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --disable-pip-version-check cryptography
+          python3 -m py_compile tools/bachata-hostid/host_identity_release_gate.py tools/bachata-hostid/apk_identity_p15.py
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, 'tools/bachata-hostid')
+          from host_identity_release_gate import check_code,CORE_OFFSETS,NATIVE_OFFSETS
+          assert len(CORE_OFFSETS)==11 and len(NATIVE_OFFSETS)==1
+          for bad in [b'',b'\x7fELFbad']:
+              try: check_code(bad,NATIVE_OFFSETS,'0'*64,'BIONIC')
+              except ValueError: pass
+              else: raise AssertionError('malformed ELF must be rejected')
+          print('P42_HOST_RELEASE_GATE_SOURCE_TEST_PASS')
+          PY

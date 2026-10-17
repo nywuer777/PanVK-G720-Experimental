@@ -1,0 +1,21 @@
+name: "Bachata F43DEV V2: mandatory host identity release gate"
+description: "Reject APKs with wrong signing cert, mismatched Bionic/GLIBC identity, missing private F43DEV V2 host, or broken runtime manifest"
+inputs:
+  apk-path:
+    description: "Path to fully signed APK; evaluated after signing and before publication"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m pip install --user --disable-pip-version-check cryptography
+    - shell: bash
+      env:
+        BACHATA_RELEASE_APK: ${{ inputs.apk-path }}
+      run: |
+        set -euo pipefail
+        test -f "$BACHATA_RELEASE_APK"
+        python3 "$GITHUB_WORKSPACE/tools/bachata-hostid/host_identity_release_gate.py" "$BACHATA_RELEASE_APK" --report "$RUNNER_TEMP/bachata-host-identity-release-gate.json"
+        echo "HOST_IDENTITY_RELEASE_GATE=PASS" >> "$GITHUB_STEP_SUMMARY"
