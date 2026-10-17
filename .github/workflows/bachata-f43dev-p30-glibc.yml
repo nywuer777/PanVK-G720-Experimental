@@ -1,0 +1,96 @@
+name: Bachata P30 - ARM64 GLIBC source build (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p30-glibc-build]
+    paths:
+      - 'tools/bachata-p30/**'
+      - '.github/workflows/bachata-f43dev-p30-glibc.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  portable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check source kit and unpack
+        run: |
+          set -euo pipefail
+          echo '0d492fff4da7bf6e49a73e0b7fcbb1f229c0f1125d903b6ee0a26c1bffa18841  tools/bachata-p30/source-kit.tar.xz' | sha256sum -c -
+          mkdir kit && tar -xJf tools/bachata-p30/source-kit.tar.xz -C kit
+      - name: Run Python regression suite
+        run: |
+          set -euo pipefail
+          cd kit
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          python3 source/p29_build_gate.py --kit source --preflight-only --output ../preflight
+      - name: Run portable C++ checks
+        run: |
+          set -euo pipefail
+          cd kit
+          for p in 24 25 26 27; do
+            g++ -std=c++20 -O1 -Wall -Wextra -Werror -Isource "tests/test_p$p.cpp" -o "/tmp/p30-test-$p"
+            "/tmp/p30-test-$p"
+          done
+          g++ -std=c++20 -O1 -Wall -Wextra -Werror -Isource tests/test_ticket.cpp -o /tmp/p30-test-28
+          /tmp/p30-test-28
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p30-source-preflight-not-apk
+          path: preflight/P29_RESULT.json
+          retention-days: 14
+          if-no-files-found: warn
+  glibc-arm64:
+    needs: portable
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Bootstrap tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Restore verified source kit
+        run: |
+          set -euo pipefail
+          echo '0d492fff4da7bf6e49a73e0b7fcbb1f229c0f1125d903b6ee0a26c1bffa18841  tools/bachata-p30/source-kit.tar.xz' | sha256sum -c -
+          mkdir kit && tar -xJf tools/bachata-p30/source-kit.tar.xz -C kit
+      - name: Clone exact public source with submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 6
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then echo SUBMODULE_DRIFT >&2; exit 3; fi
+      - name: Install Debian arm64 build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Compile pinned ARM64 GLIBC core with P25-P28 ports
+        run: |
+          set -euo pipefail
+          python3 kit/source/p29_build_gate.py --kit kit/source --source-root upstream --output p30-report --build
+          grep -q '"status": "PUBLIC_CORE_GLIBC_COMPILED_NOT_F43DEV"' p30-report/P29_RESULT.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p30-arm64-glibc-build-report-not-apk
+          path: |
+            p30-report/P29_RESULT.json
+            p30-report/p28-port.diff
+            p30-report/apply.log
+            p30-report/diff-check.log
+            p30-report/build.log
+            p30-report/elf-header.txt
+            p30-report/elf-program.txt
+            p30-report/elf-dynamic.txt
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
