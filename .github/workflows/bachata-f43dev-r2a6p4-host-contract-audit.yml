@@ -1,0 +1,51 @@
+name: Bachata F43DEV R2A6 P4 - original Android host contract audit
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p4-host-contract-v2-audit
+    paths:
+      - tools/bachata-r2a6p4/**
+      - .github/workflows/bachata-f43dev-r2a6p4-host-contract-audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-dex-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Python auditor and run 12 synthetic test cases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/bachata-r2a6p4/audit_host_contract.py
+          python3 -m unittest discover \
+            -s tools/bachata-r2a6p4 -p 'test_audit_host_contract.py' -v |
+            tee /tmp/f43-audit-results.txt
+      - name: Publish gated analysis sources only
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cp tools/bachata-r2a6p4/audit_host_contract.py result/
+          cp tools/bachata-r2a6p4/test_audit_host_contract.py result/
+          printf '%s\n' \
+            'EXPECTED_APK_SHA256=e4ec95a1ffcb33f1bf7d8e9d9587cc0af0f839de226b8ed74fb03f08e3444ded' \
+            'EXPECTED_BASELINE_CORE_SHA256=b1cd025306b1dbd7b07d3bc228a0f18392d4f32fdeb934c9676e75ed0090abb4' \
+            'ORIGINAL_APK_NOT_UPLOADED=yes' \
+            'ANDROID_APP_SOURCE_NOT_PRESENT_IN_REPOSITORY=yes' \
+            'TESTS_USE_ONLY_SYNTHETIC_DEX=yes' \
+            'REAL_ANDROID_BROKER_TEST=NOT_PERFORMED' \
+            'PROTOCOL_2_INTEROPERABILITY=UNVERIFIED' \
+            'APKS_BUILT=0' > result/PROVENANCE.txt
+          (cd result && sha256sum audit_host_contract.py test_audit_host_contract.py PROVENANCE.txt > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p4-host-v2-readonly-audit-source-NOT-APK
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
