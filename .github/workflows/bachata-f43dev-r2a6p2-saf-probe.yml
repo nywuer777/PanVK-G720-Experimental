@@ -29,7 +29,7 @@ jobs:
             tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6p2-probe
           /tmp/r2a6p2-probe | tee /tmp/probe-normal.txt
           grep -Fq 'R2A6P2_PROBE_MOCK_TESTS_PASS' /tmp/probe-normal.txt
-      - name: ASan and UBSan: probe protocol, FD and no-file-content mode
+      - name: "ASan and UBSan - probe protocol, FD and no-file-content mode"
         shell: bash
         run: |
           set -euo pipefail
