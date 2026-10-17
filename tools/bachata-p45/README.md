@@ -1,0 +1,3 @@
+# P45 — BCn per-(mip,layer) Vulkan image view proof
+
+Source-only experimental port for public shadPS4 AArch64 GLIBC pinned `be6bc2e9c60799e071dd2fafa6216e8d80ec619c`. Source delta SHA256 `d0c9847836489ac03c5604b9ab391dd3cc2c7db43c363a75f24cd89d44c6c6dd`. Builds on P36.2–P39 source kits and previously validated P44 contract. Binds actual Vulkan backing, completed GPU fence, and per-layer/mip upload ledger to sampled RGBA8 UNORM/SRGB view admission. Host F43DEV private GLIBC binary differs; compatibility unproven, not an APK fix. Old P42 remains preserved. No assert suppression, no PanVK, resolution or signature changes. Outlast/Minecraft not certified fixed.
