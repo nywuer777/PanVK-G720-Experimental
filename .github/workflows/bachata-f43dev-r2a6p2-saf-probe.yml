@@ -1,0 +1,182 @@
+name: Bachata F43DEV R2A6 P2 - safe real-broker probe candidate
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p2-saf-probe
+    paths:
+      - .github/workflows/bachata-f43dev-r2a6p2-saf-probe.yml
+      - tools/bachata-r2a6p2/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test no-content BSF1 probe against synthetic broker
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6p2 \
+            tools/bachata-r2a6p2/test_saf_probe.cpp \
+            tools/bachata-r2a6p2/saf_probe.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6p2-probe
+          /tmp/r2a6p2-probe | tee /tmp/probe-normal.txt
+          grep -Fq 'R2A6P2_PROBE_MOCK_TESTS_PASS' /tmp/probe-normal.txt
+      - name: ASan and UBSan: probe protocol, FD and no-file-content mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6p2 \
+            tools/bachata-r2a6p2/test_saf_probe.cpp \
+            tools/bachata-r2a6p2/saf_probe.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6p2-probe-asan
+          ASAN_OPTIONS=detect_leaks=1 /tmp/r2a6p2-probe-asan |
+            tee /tmp/probe-asan.txt
+          grep -Fq 'R2A6P2_PROBE_MOCK_TESTS_PASS' /tmp/probe-asan.txt
+      - name: Exact pinned shadPS4 and chained patches R2A to R2A6/P2
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          python3 tools/bachata-r2a6p1/apply_r2a6p1.py upstream
+          python3 tools/bachata-r2a6p2/apply_r2a6p2.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 8
+          test -s upstream/src/platform/bachata/saf_probe.cpp
+          grep -Fq 'bachata-saf-probe-only' upstream/src/main.cpp
+          grep -Fq 'bachata-saf-probe-path' upstream/src/main.cpp
+          grep -Fq 'ProbePathFlag' upstream/src/platform/bachata/saf_cli_contract.h
+          grep -Fq 'SafeDiagnostic' upstream/src/main.cpp
+          grep -Fq 'runtime_client.SendStopped' upstream/src/main.cpp
+          grep -Fq 'saf_probe.cpp' upstream/CMakeLists.txt
+          grep -Fq 'BACHATA_F43DEV_R2A6P1_LAB_VFS_OPTIN_REAL_BROKER_UNVERIFIED' upstream/src/main.cpp
+          git -C upstream diff > R2A6P2-bsf1-probe.patch
+          sha256sum R2A6P2-bsf1-probe.patch > SHA256SUMS.txt
+          printf 'broker=MOCK_ONLY\nreads_file_contents=NO\nlogin=VERIFIED_HOST_SOCKET_FIRST\nprobe_requires_cli_optin=YES\napk=NOT_BUILT\n' > PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p2-bsf1-probe-source-NOT-APK
+          path: |
+            R2A6P2-bsf1-probe.patch
+            SHA256SUMS.txt
+            PROVENANCE.txt
+          retention-days: 14
+          if-no-files-found: error
+
+  aarch64-glibc-probe:
+    needs: source-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM64 cross compiler and binutils
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Cross-compile BSF1 + probe Linux ARM64/GLIBC
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -fPIC -shared -Itools/bachata-r2a5 -Itools/bachata-r2a6p2 \
+            tools/bachata-r2a6p2/saf_probe.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp \
+            -o result/libbachata_bsf1_probe_glibc_aarch64_TEST_ONLY.so
+          readelf -h result/libbachata_bsf1_probe_glibc_aarch64_TEST_ONLY.so > result/elf-header.txt
+          readelf -d result/libbachata_bsf1_probe_glibc_aarch64_TEST_ONLY.so > result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' result/elf-header.txt
+          if grep -Fq 'Shared library: [liblog.so]' result/elf-dynamic.txt; then exit 4; fi
+          sha256sum result/*.so > result/SHA256SUMS.txt
+          printf 'target=linux-glibc-aarch64\nandroid_broker=NOT_TESTED\napk=NOT_BUILT\n' > result/PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p2-bsf1-probe-glibc-arm64-TEST
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
+
+  full-core-elf:
+    needs: [source-preflight, aarch64-glibc-probe]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Base tooling
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Fetch pinned source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Apply complete chain R2A R2A2 R2A4 R2A5 R2A6 R2A6P1 R2A6P2
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          python3 tools/bachata-r2a6p1/apply_r2a6p1.py upstream
+          python3 tools/bachata-r2a6p2/apply_r2a6p2.py upstream
+          git -C upstream diff --check
+      - name: Install Debian Linux ARM64 FEX build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Build and inspect non-installable FEX core
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          grep -aFq 'BSF1_LAB_PROBE_FILE_OK' "$ELF"
+          grep -aFq 'bachata-saf-probe-only' "$ELF"
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A6P2-BSF1-PROBE-CANDIDATE
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A6P2-BSF1-PROBE-CANDIDATE > SHA256SUMS.txt)
+          printf 'source=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\nprobe=OPT_IN_NO_GAME_NO_GPU\nreal_android_broker=NOT_TESTED\napk_integrated=NO\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p2-glibc-FEX-PROBE-ELF-CANDIDATE
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
