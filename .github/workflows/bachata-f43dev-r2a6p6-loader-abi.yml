@@ -1,0 +1,54 @@
+name: Bachata F43DEV R2A6 P6 - loader ABI static evidence (no APK)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p6-loader-abi-proof
+    paths:
+      - tools/bachata-r2a6p6/**
+      - .github/workflows/bachata-f43dev-r2a6p6-loader-abi.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  loader-abi-audit-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run 20 isolated ELF, SONAME and manifest audit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/bachata-r2a6p6/audit_loader_abi.py
+          python3 -m unittest discover \
+            -s tools/bachata-r2a6p6 -p 'test_audit_loader_abi.py' -v
+          python3 tools/bachata-r2a6p6/audit_loader_abi.py --help > /dev/null
+      - name: Publish source-only auditable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cp tools/bachata-r2a6p6/audit_loader_abi.py result/
+          cp tools/bachata-r2a6p6/test_audit_loader_abi.py result/
+          cat > result/RELEASE-GATE.txt <<'EOF'
+          R2A6/P6: LOADER STATIC AUDIT PREPARATION
+          Original F43DEV V2 signed APK NEVER uploaded to CI.
+          Native Android libbachata_native_runtime.so NEVER uploaded to CI.
+          GLIBC ld-linux-aarch64.so.1 and ELF binaries NEVER uploaded to source artifact.
+          CI tests: SYNTHETIC ONLY; cannot prove actual loader or broker behavior.
+          Local user-authorized read-only APK check is a separate evidence gate.
+          Bionic host signature verification and BSF1 live handshake: UNVERIFIED.
+          APK built/installed: NO.
+          EOF
+          printf 'expected_apk_sha256=e4ec95a1ffcb33f1bf7d8e9d9587cc0af0f839de226b8ed74fb03f08e3444ded\nexpected_loader_sha256=e9d9a01ac27c4369980023a7b20817aa4c158a8bd797c9883bd20386f126e578\nexpected_android_runtime_sha256=16bd679a762ee3615bc3deb24e0945964775f267eb2f1dc0f015c2eeb030ef54\n' > result/PINNED-SHA256.txt
+          (cd result && sha256sum audit_loader_abi.py test_audit_loader_abi.py RELEASE-GATE.txt PINNED-SHA256.txt > SHA256SUMS.txt)
+      - name: Publish noninstallable tools and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p6-readonly-glibc-loader-abi-audit-NOT-APK
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
