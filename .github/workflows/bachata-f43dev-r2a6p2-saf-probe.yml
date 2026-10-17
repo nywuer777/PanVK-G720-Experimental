@@ -77,6 +77,10 @@ jobs:
             R2A6P2-bsf1-probe.patch
             SHA256SUMS.txt
             PROVENANCE.txt
+            tools/bachata-r2a6p2/saf_probe.h
+            tools/bachata-r2a6p2/saf_probe.cpp
+            tools/bachata-r2a6p2/test_saf_probe.cpp
+            tools/bachata-r2a6p2/apply_r2a6p2.py
           retention-days: 14
           if-no-files-found: error
 
