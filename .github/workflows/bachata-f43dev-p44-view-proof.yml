@@ -1,0 +1,33 @@
+name: P44 BCn decoded Vulkan sampled view proof (source-only)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p44-bcn-view-proof]
+    paths:
+      - 'tools/bachata-p44/**'
+      - '.github/workflows/bachata-f43dev-p44-view-proof.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile and test P44 strict per-subresource BCn view admission
+        run: |
+          set -euo pipefail
+          cd tools/bachata-p44
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. test_p44.cpp -o /tmp/p44_cpp
+          /tmp/p44_cpp
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p44.cpp -o /tmp/p44_san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p44_san
+      - name: Fail-closed integration declaration
+        run: |
+          set -euo pipefail
+          grep -Fq 'NOT a private ELF binary patch' tools/bachata-p44/p44_bcn_imageview_contract.hpp
+          grep -Fq 'NOT_AVAILABLE' tools/bachata-p44/README.md && exit 1 || :
+          grep -Fq 'não será produzido APK' tools/bachata-p44/README.md
+          echo 'P44_SOURCE_CONTRACT_TESTED=YES' >> "$GITHUB_STEP_SUMMARY"
+          echo 'F43DEV_PRIVATE_GLIBC_PATCHED=NO' >> "$GITHUB_STEP_SUMMARY"
+          echo 'OUTLAST_FIXED=NO' >> "$GITHUB_STEP_SUMMARY"
