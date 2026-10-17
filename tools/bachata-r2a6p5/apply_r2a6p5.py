@@ -77,6 +77,20 @@ def apply(root: Path, own: Path):
         if (!connected.has_value() || !connected->SendHello()) {
 #endif'''
     m = replace_unique(m,before,after,"core main post-auth hello")
+    m = replace_unique(
+        m, '#include "platform/bachata/saf_probe.h"',
+        '#include "platform/bachata/saf_probe.h"\n'
+        '#include "platform/bachata/f43dev_contract_v2.h"',
+        "main include strict contract")
+    m = replace_unique(
+        m, '    if (!Platform::Bachata::R2A4::ValidateContractCli(',
+        '    // Host DEX enforces [0-9a-f]{32}; reject bad nonce before socket I/O.\n'
+        '    if (!bachataContract || !Platform::Bachata::ContractV2::ValidNonce(*bachataContract)) {\n'
+        '        std::cerr << "F43DEV host V2 contract syntax rejected\n";\n'
+        '        return 1;\n'
+        '    }\n'
+        '    if (!Platform::Bachata::R2A4::ValidateContractCli(',
+        "main early lowercase-hex validation")
     code["src/main.cpp"] = m
 
     header_path = root / HEADER_NAME
@@ -84,9 +98,10 @@ def apply(root: Path, own: Path):
     if not header_input.is_file() or header_path.exists():
         raise ValueError("Missing V2 header or output already exists")
     header_data = header_input.read_bytes()
-    expected = "DO_NOT_SET_SHA_HERE"
-    if expected != "DO_NOT_SET_SHA_HERE" and hashlib.sha256(header_data).hexdigest() != expected:
-        raise ValueError("Header checksum mismatch")
+    expected = "4770d504b77547323a6ec781a74749f8ff3f04e8"
+    actual = hashlib.sha1(b"blob " + str(len(header_data)).encode() + b"\\0" + header_data).hexdigest()
+    if actual != expected:
+        raise ValueError("Header Git blob SHA mismatch")
     # Mutate only when every anchor and prerequisite has been validated.
     for name, body in code.items():
         (root / name).write_text(body, encoding="utf-8", newline="")
