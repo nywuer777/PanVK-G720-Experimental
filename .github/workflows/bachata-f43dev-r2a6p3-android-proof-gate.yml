@@ -1,0 +1,59 @@
+name: Bachata F43DEV R2A6 P3 - real Android SAF proof gate (NO APK)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p3-android-proof-gate
+    paths:
+      - .github/workflows/bachata-f43dev-r2a6p3-android-proof-gate.yml
+      - tools/bachata-r2a6p3/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  curated-device-evidence-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run safety and consistency tests for sanitized device observations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover \
+            -s tools/bachata-r2a6p3 -p 'test_device_evidence.py' -v
+      - name: Verify positive fixture is UNATTESTED and fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cat > /tmp/r2a6p3-safe-markers.txt <<'EOF'
+          BACHATA_F43DEV_R2A2_HOST_GATE_OK
+          BACHATA/1 HELLO version=1
+          BACHATA/1 EVENT Starting
+          BSF1_LAB_PROBE_FILE_OK
+          BACHATA/1 EVENT Stopped exit_code=0
+          EOF
+          python3 tools/bachata-r2a6p3/device_evidence.py \
+            /tmp/r2a6p3-safe-markers.txt --output result/CONSISTENCY_ONLY.json
+          grep -Fq '"real_broker_verified": false' result/CONSISTENCY_ONLY.json
+          grep -Fq '"apk_signature_verified": false' result/CONSISTENCY_ONLY.json
+          grep -Fq '"status": "CONSISTENT_UNATTESTED_EVENTS"' result/CONSISTENCY_ONLY.json
+          printf '%s\n' \
+            'This workflow cannot contact the user Android device.' \
+            'No Android host source or signed lab APK has been supplied.' \
+            'No remote broker success claim is authorized by simulated markers.' \
+            'Host developer/authorized build required for a live R2A6P2 probe.' \
+            'R2A6P3 output: procedural readiness gate ONLY.' > result/RELEASE_BLOCKER.txt
+          cp tools/bachata-r2a6p3/device_evidence.py result/
+          cp tools/bachata-r2a6p3/test_device_evidence.py result/
+          (cd result && sha256sum * > SHA256SUMS.txt)
+      - name: Publish audit code and synthetic evidence (NOT APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-f43dev-r2a6p3-android-broker-proof-readiness-NOT-APK
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
