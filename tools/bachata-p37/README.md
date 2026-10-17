@@ -1,0 +1,3 @@
+# P37 — Shader IR basic-block image access order
+
+P36.2 base source SHA-256 `ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39`; P37 delta SHA-256 `366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80`. Exact public source `be6bc2e9c60799e071dd2fafa6216e8d80ec619c`. The instrumentation records the order of shader image accesses only **within each basic block**. It does not claim control flow order across blocks, shader invocations, or workgroups; does not fix Outlast/Minecraft; never changes private P23 APK, its key, PanVK, Vulkan synchronization, game data, or GPU settings. Workflow builds GLIBC AArch64 public core only and publishes build evidence without a new APK.

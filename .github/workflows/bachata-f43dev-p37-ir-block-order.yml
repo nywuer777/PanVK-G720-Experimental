@@ -1,0 +1,118 @@
+name: P37 Minecraft shader IR basic-block access order — source-only ARM64 GLIBC
+on:
+  push:
+    branches: [exp/bachata-f43dev-p37-ir-block-order]
+    paths:
+      - 'tools/bachata-p37/**'
+      - '.github/workflows/bachata-f43dev-p37-ir-block-order.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify P36.2 base and P37 delta
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          mkdir kit
+          tar -xJf tools/bachata-p36/source-kit.tar.xz -C kit
+          tar -xJf tools/bachata-p37/source-delta.tar.xz -C kit
+      - name: Python P33-P37 regression tests
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest discover -s . -p 'test_port_p3*.py' -v
+      - name: Portable C++ GCC and ASan UBSan
+        run: |
+          set -euo pipefail
+          cd kit/source
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. test_p37.cpp -o /tmp/p37_cpp
+          /tmp/p37_cpp
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p37.cpp -o /tmp/p37_sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p37_sanitized
+      - name: Apply exact pinned source and verify shader-access path
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p37.py --source-root upstream --out p37-port.diff --write > p37-preflight.json
+          git -C upstream diff --check
+          grep -Fq 'P37_IR_BASIC_BLOCK_SEQUENCE' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'p37_order_mask' upstream/src/shader_recompiler/resource.h
+          grep -Fq 'P37_BASIC_BLOCK_ORDER_DIAG' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'P36_SHADER_OPCODE_PROVENANCE' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
+          test -f upstream/src/shader_recompiler/ir/p37_ir_sequence.hpp
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p37-ir-block-order-source-preflight-NOT-APK
+          path: |
+            p37-port.diff
+            p37-preflight.json
+          retention-days: 14
+          if-no-files-found: warn
+  glibc-aarch64:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Bootstrap Debian
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Restore exact P36.2 source and P37 delta
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          mkdir kit
+          tar -xJf tools/bachata-p36/source-kit.tar.xz -C kit
+          tar -xJf tools/bachata-p37/source-delta.tar.xz -C kit
+      - name: Clone public source pinned with recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then exit 3; fi
+      - name: Install Debian GLIBC ARM64 build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Port and compile whole public AArch64 GLIBC ELF
+        run: |
+          set -euo pipefail
+          mkdir -p p37-build
+          python3 kit/source/port_renderer_p37.py --source-root upstream --out p37-build/p37-port.diff --write > p37-build/apply.json
+          git -C upstream diff --check
+          ( cd upstream && bash runtime/scripts/build-shadps4-arm64.sh ) >p37-build/build.log 2>&1 || { tail -170 p37-build/build.log; exit 1; }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" >p37-build/elf-header.txt
+          readelf -l "$elf" >p37-build/elf-program.txt
+          readelf -d "$elf" >p37-build/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p37-build/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p37-build/elf-program.txt
+          sha256sum "$elf" >p37-build/SHA256SUMS.txt
+          printf '%s\n' 'P37_SHADER_BASIC_BLOCK_ORDER=DIAGNOSTIC_ONLY' 'CROSS_BLOCK_HAPPENS_BEFORE=NOT_PROVEN' 'VULKAN_BARRIER_REWRITE=NO' 'PRIVATE_HOST_COMPATIBILITY=NOT_PROVEN' 'MINECRAFT_FIXED=NO' 'OUTLAST_FIXED=NO' 'APK_PRODUCED=NO' >p37-build/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p37-public-aarch64-glibc-build-evidence-NOT-APK
+          path: |
+            p37-build/
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
