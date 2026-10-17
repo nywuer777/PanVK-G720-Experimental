@@ -1,0 +1,127 @@
+name: P38 optional inter-dispatch shader image barrier - AArch64 GLIBC (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p38-interdispatch-barrier]
+    paths:
+      - 'tools/bachata-p38/**'
+      - '.github/workflows/bachata-f43dev-p38-interdispatch.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify source-only dependency chain and unpack
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          mkdir kit
+          tar -xJf tools/bachata-p36/source-kit.tar.xz -C kit
+          tar -xJf tools/bachata-p37/source-delta.tar.xz -C kit
+          tar -xJf tools/bachata-p38/source-delta.tar.xz -C kit
+      - name: Run source port regressions P33-P38
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest discover -s . -p 'test_port_p3*.py' -v
+      - name: C++20 barrier policy GCC and Clang ASan UBSan
+        run: |
+          set -euo pipefail
+          cd kit/source
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. test_p38.cpp -o /tmp/p38test
+          /tmp/p38test
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p38.cpp -o /tmp/p38san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p38san
+      - name: Apply P38 to exact pinned public shadPS4 source
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p38.py --source-root upstream --out p38-port.diff --write > p38-port-result.json
+          git -C upstream diff --check
+          grep -Fq 'P38_INTERDISPATCH_SHADER_IMAGE_BARRIER' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+          grep -Fq 'p38_pending_shader_image_write' upstream/src/video_core/renderer_vulkan/vk_rasterizer.h
+          grep -Fq 'BACHATA_P38_INTERDISPATCH_BARRIER' upstream/src/video_core/renderer_vulkan/p38_interdispatch_barrier.hpp
+          grep -Fq 'AuthorizesSameDispatchAliasFix' upstream/src/video_core/renderer_vulkan/p38_interdispatch_barrier.hpp
+          grep -Fq 'P37_IR_BASIC_BLOCK_SEQUENCE' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
+          # No production asserts removed; known Minecraft restrictions remain.
+          grep -Fq 'P26_ALIAS_POLICY' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p38-source-preflight-no-apk
+          path: |
+            p38-port.diff
+            p38-port-result.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  glibc-arm64:
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install bootstrap tools
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Restore verified P36.2-P38 source kit
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          mkdir kit
+          tar -xJf tools/bachata-p36/source-kit.tar.xz -C kit
+          tar -xJf tools/bachata-p37/source-delta.tar.xz -C kit
+          tar -xJf tools/bachata-p38/source-delta.tar.xz -C kit
+      - name: Clone fixed public source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > submodules.txt
+          if grep -Eq '^[+\-U]' submodules.txt; then exit 3; fi
+      - name: Debian multiarch cross-build dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: P38 source apply and compile entire public GLIBC AArch64 core
+        run: |
+          set -euo pipefail
+          mkdir -p p38-build
+          python3 kit/source/port_renderer_p38.py --source-root upstream --out p38-build/p38-port.diff --write >p38-build/apply.json
+          git -C upstream diff --check
+          ( cd upstream && bash runtime/scripts/build-shadps4-arm64.sh ) >p38-build/build.log 2>&1 || { tail -180 p38-build/build.log; exit 1; }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" >p38-build/elf-header.txt
+          readelf -l "$elf" >p38-build/elf-program.txt
+          readelf -d "$elf" >p38-build/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p38-build/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p38-build/elf-program.txt
+          sha256sum "$elf" >p38-build/SHA256SUMS.txt
+          printf '%s\n' 'PUBLIC_GLIBC_AARCH64_SOURCE=YES' 'INTERDISPATCH_BARRIER_DEFAULT=OFF' 'INTERDISPATCH_BARRIER_OPTIN=YES' 'INTRA_DISPATCH_ALIAS_PROVEN_SAFE=NO' 'MINECRAFT_FIXED=NO' 'OUTLAST_FIXED=NO' 'F43DEV_PRIVATE_HOST_COMPATIBILITY=NOT_VERIFIED' 'ANDROID_APK_BUILT=NO' >p38-build/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p38-public-GLIBC-AArch64-build-evidence-not-apk
+          path: |
+            p38-build/
+            submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
