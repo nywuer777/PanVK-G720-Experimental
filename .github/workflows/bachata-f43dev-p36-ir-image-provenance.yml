@@ -41,7 +41,8 @@ jobs:
           python3 kit/source/port_renderer_p36.py --source-root upstream --out p36.diff --write > p36-preflight.json
           git -C upstream diff --check
           grep -Fq 'image.is_read |= desc.is_read' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
-          grep -Fq 'image.is_sampled |= desc.is_sampled'\n          grep -Fq 'image.is_plain_read |= desc.is_plain_read' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'image.is_sampled |= desc.is_sampled' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
+          grep -Fq 'image.is_plain_read |= desc.is_plain_read' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
           grep -Fq 'const bool is_read = is_plain_read || is_atomic' upstream/src/shader_recompiler/ir/passes/resource_tracking_pass.cpp
           grep -Fq 'P36_SHADER_OPCODE_PROVENANCE' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp
           grep -Fq 'P34_GPUTILE_DETILE_READBACK' upstream/src/video_core/texture_cache/texture_cache.cpp
