@@ -1,0 +1,55 @@
+name: Bachata F43DEV R2A6 P7 - JNI native bridge ABI proof (no APK)
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p7-native-jni-abi
+    paths:
+      - tools/bachata-r2a6p7/**
+      - .github/workflows/bachata-f43dev-r2a6p7-native-jni-abi.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-jni-abi-static-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run 24 isolated synthetic DEX/JNI prototype checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile tools/bachata-r2a6p7/audit_native_bridge.py
+          python3 -m unittest discover -s tools/bachata-r2a6p7 \
+            -p 'test_audit_native_bridge.py' -v
+          python3 tools/bachata-r2a6p7/audit_native_bridge.py --help >/dev/null
+      - name: No real Android source, keys, APK or Bionic library in CI
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          cp tools/bachata-r2a6p7/audit_native_bridge.py result/
+          cp tools/bachata-r2a6p7/test_audit_native_bridge.py result/
+          cat > result/PROVENANCE.txt <<'EOF'
+          R2A6P7_STAGE=OFFLINE_JNI_ABI_AUDIT
+          ORIGINAL_F43DEV_APK_UPLOADED=NO
+          ORIGINAL_BIONIC_LIBRARY_UPLOADED=NO
+          TEST_INPUTS=SYNTHETIC_DEX_ONLY
+          ANDROID_HOST_JAVA_KOTLIN_GRADLE_SOURCE=NOT_PROVIDED
+          ACTUAL_JNI_RUN_ON_DEVICE=NOT_TESTED
+          ROOTFS_AND_LD_SO_MAPPING_ON_DEVICE=NOT_TESTED
+          REAL_BSF1_BROKER_HANDSHAKE=NOT_TESTED
+          NEW_APK=NOT_BUILT
+          V2_FUNCTIONAL_APK=UNCHANGED
+          PANVK_FASE3_F43=UNCHANGED
+          EOF
+          (cd result && sha256sum audit_native_bridge.py test_audit_native_bridge.py PROVENANCE.txt > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p7-native-jni-abi-audit-NOT-APK
+          path: result/
+          retention-days: 14
+          if-no-files-found: error
