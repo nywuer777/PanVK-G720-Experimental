@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "core/file_sys/directories/saf_directory.h"
 #include <algorithm>
+#include <cstddef>
 #include <array>
 #include <cstring>
 #include <limits>
