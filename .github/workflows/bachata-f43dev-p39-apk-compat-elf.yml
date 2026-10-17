@@ -1,10 +1,10 @@
-name: P39 exact same-ImageId sampled-storage GENERAL layout (NOT APK)
+name: P39 ELF byte-for-byte runtime compatibility trial (NOT APK)
 on:
   push:
     branches: [exp/bachata-f43dev-p39-apk-compat-elf]
     paths:
       - 'tools/bachata-p39/**'
-      - '.github/workflows/bachata-f43dev-p39-same-image-layout.yml'
+      - '.github/workflows/bachata-f43dev-p39-apk-compat-elf.yml'
   workflow_dispatch:
 permissions:
   contents: read
