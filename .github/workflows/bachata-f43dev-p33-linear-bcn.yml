@@ -1,0 +1,121 @@
+name: P33 public-core active linear BCn - AArch64 GLIBC candidate (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p33-active-linear-bcn]
+    paths:
+      - 'tools/bachata-p33/**'
+      - '.github/workflows/bachata-f43dev-p33-linear-bcn.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unpack P33 delta and pinned P28 dependency source kit
+        run: |
+          set -euo pipefail
+          echo '4e55b8f7b9fb9499ac1ebcc9c18c3faed61914500ecccf290ce7b27e4995658b  tools/bachata-p33/p33-ci-delta.tar.xz' | sha256sum -c -
+          echo '0d492fff4da7bf6e49a73e0b7fcbb1f229c0f1125d903b6ee0a26c1bffa18841  tools/bachata-p30/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          tar -xJf tools/bachata-p30/source-kit.tar.xz -C kit
+          tar -xJf tools/bachata-p33/p33-ci-delta.tar.xz -C kit/source
+      - name: P33 C++ and Python regression tests
+        run: |
+          set -euo pipefail
+          cd kit/source
+          python3 -m unittest test_port_p33.py -v
+          g++ -std=c++20 -Wall -Wextra -Werror -O2 -I. test_p33.cpp -o /tmp/p33-linear
+          /tmp/p33-linear
+          clang++ -std=c++20 -Wall -Wextra -Werror -O1 -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p33.cpp -o /tmp/p33-linear-san
+          /tmp/p33-linear-san
+      - name: Clone exact pinned public source and apply active path
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 kit/source/port_renderer_p33.py --source-root upstream --out p33-port.diff --write | tee p33-source-result.json
+          git -C upstream diff --check
+          grep -Fq 'P33_BCN_LINEAR_ACTIVE' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'P33_BCN_LINEAR_HOST_RGBA_SELECTED' upstream/src/video_core/texture_cache/image.cpp
+          grep -Fq 'BachataP27::UploadDecodedToRgba' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'BachataP33::CheckMip' upstream/src/video_core/texture_cache/texture_cache.cpp
+          grep -Fq 'P25 decoded BCn sampled view blocked' upstream/src/video_core/texture_cache/image_view.cpp
+          grep -Fq 'Restricted core robust-image compatibility blocker' upstream/src/video_core/renderer_vulkan/vk_rasterizer.cpp || true
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p33-public-source-active-path-preflight-NOT-APK
+          path: |
+            p33-port.diff
+            p33-source-result.json
+          retention-days: 14
+          if-no-files-found: warn
+  glibc-arm64:
+    needs: source-preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Bootstrap
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils xz-utils binutils
+      - uses: actions/checkout@v4
+      - name: Restore verified source inputs
+        run: |
+          set -euo pipefail
+          echo '4e55b8f7b9fb9499ac1ebcc9c18c3faed61914500ecccf290ce7b27e4995658b  tools/bachata-p33/p33-ci-delta.tar.xz' | sha256sum -c -
+          echo '0d492fff4da7bf6e49a73e0b7fcbb1f229c0f1125d903b6ee0a26c1bffa18841  tools/bachata-p30/source-kit.tar.xz' | sha256sum -c -
+          mkdir kit
+          tar -xJf tools/bachata-p30/source-kit.tar.xz -C kit
+          tar -xJf tools/bachata-p33/p33-ci-delta.tar.xz -C kit/source
+      - name: Obtain public source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > p33-submodules.txt
+          if grep -Eq '^[+\-U]' p33-submodules.txt; then exit 3; fi
+      - name: Debian arm64 dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Apply P33 active path and compile full AArch64 GLIBC ELF
+        run: |
+          set -euo pipefail
+          mkdir -p p33-build
+          python3 kit/source/port_renderer_p33.py --source-root upstream --out p33-build/p33-port.diff --write >p33-build/apply.json
+          git -C upstream diff --check
+          (
+            cd upstream
+            bash runtime/scripts/build-shadps4-arm64.sh
+          ) >p33-build/full-build.log 2>&1 || {
+            tail -150 p33-build/full-build.log
+            exit 1
+          }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" >p33-build/elf-header.txt
+          readelf -l "$elf" >p33-build/elf-program.txt
+          readelf -d "$elf" >p33-build/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p33-build/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' p33-build/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p33-build/elf-program.txt
+          sha256sum "$elf" >p33-build/SHA256SUMS.txt
+          printf '%s\n' 'P33_PUBLIC_CORE_COMPILED_SOURCE_CANDIDATE_ONLY' 'F43DEV_HOST_IDENTITY_NOT_VALIDATED' 'OUTLAST_NOT_VERIFIED' 'MINECRAFT_NOT_FIXED' 'APK_NOT_PRODUCED' >p33-build/RELEASE-GATE.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p33-arm64-glibc-build-evidence-NOT-APK
+          path: |
+            p33-build/
+            p33-submodules.txt
+          retention-days: 14
+          if-no-files-found: warn
