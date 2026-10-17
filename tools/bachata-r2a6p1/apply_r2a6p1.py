@@ -127,6 +127,12 @@ constexpr std::string_view VfsRootFlag = "--bachata-saf-vfs-root";''',"CLI sensi
             return 1;
         }
 #endif''',"activate only after verified host handshake")
+    main=one(main,'''    std::cerr << "BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED\n";''',
+      '''    if (bachataSafVfsLab) {
+        std::cerr << "BACHATA_F43DEV_R2A6P1_LAB_VFS_OPTIN_REAL_BROKER_UNVERIFIED\n";
+    } else {
+        std::cerr << "BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED\n";
+    }''',"accurate lab/runtime marker")
     source["src/main.cpp"]=main
 
     fs=source["src/core/file_sys/fs.cpp"]
