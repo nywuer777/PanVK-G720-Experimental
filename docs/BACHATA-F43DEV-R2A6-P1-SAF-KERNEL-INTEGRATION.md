@@ -1,6 +1,6 @@
 # Bachata F43DEV — R2A.6/P1: SAF read-only kernel integration
 
-**Date:** 2026-10-16/17 · **Branch:** `exp/bachata-f43dev-r2a6p1-saf-kernel` · [CI #38996567581](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38996567581).
+**Date:** 2026-10-16/17 · **Branch:** `exp/bachata-f43dev-r2a6p1-saf-kernel` · [CI #38996853364](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38996853364).
 
 ## Scope and provenance
 
@@ -21,10 +21,14 @@ Exact public source `zenithblue-oss/shadps4-arm64` at `be6bc2e9c60799e071dd2fafa
 
 ## CI gates (as of initial source preflight)
 
-[Workflow #38996567581](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38996567581):
+[Workflow #38996853364](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38996853364):
 - `source-and-broker-tests` **SUCCESS**: 16/16 opt-in/invalid-root tests, ASan/UBSan pass, previous 33 broker and 35 guest-path tests, unique-anchor patches and `git diff --check`.
 - `arm64-glibc-adapter` **SUCCESS**: cross-compiled Linux AArch64/GLIBC BSF1+VFS guest mount as a standalone shared test library. Not Bionic.
 - `full-glibc-fex-core` underway at documentation time. The full shadPS4 ELF must build before it can be described as compiled. **No APK is released.**
+
+## Latest CI run and diagnostic marker
+
+The latest source revision includes distinct startup messages for disabled VFS versus explicit laboratory opt-in, rather than misleadingly logging VFS disabled during a lab session. The latest workflow is [#38996853364](https://github.com/nywuer777/PanVK-G720-Experimental/actions/runs/38996853364). Earlier runs were pre-fix and must not be treated as final release evidence.
 
 ## Remaining blockers (release gate)
 
