@@ -1,0 +1,207 @@
+name: Bachata F43DEV R2A6 P1 - SAF Kernel VFS LAB-ONLY
+
+on:
+  push:
+    branches:
+      - exp/bachata-f43dev-r2a6p1-saf-kernel
+    paths:
+      - .github/workflows/bachata-f43dev-r2a6p1-kernel-vfs.yml
+      - tools/bachata-r2a6p1/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-broker-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: R2A6 P1 laboratory opt-in & guest mount tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6 -Itools/bachata-r2a6p1 \
+            tools/bachata-r2a6p1/test_guest_mount.cpp \
+            tools/bachata-r2a6p1/saf_guest_mount.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6p1-mount
+          /tmp/r2a6p1-mount | tee /tmp/r2a6p1-mount.txt
+          grep -Fq 'R2A6P1_GUEST_MOUNT_TESTS_PASS count=16' /tmp/r2a6p1-mount.txt
+      - name: ASan/UBSan for R2A6 P1 laboratory activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6 -Itools/bachata-r2a6p1 \
+            tools/bachata-r2a6p1/test_guest_mount.cpp \
+            tools/bachata-r2a6p1/saf_guest_mount.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6p1-mount-asan
+          ASAN_OPTIONS=detect_leaks=1 /tmp/r2a6p1-mount-asan |
+            tee /tmp/r2a6p1-mount-asan.txt
+          grep -Fq 'R2A6P1_GUEST_MOUNT_TESTS_PASS count=16' /tmp/r2a6p1-mount-asan.txt
+      - name: R2A5 33 broker tests and R2A6 35 path tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 tools/bachata-r2a5/test_bsf1_mock.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a5-tests
+          /tmp/r2a5-tests | tee /tmp/r2a5.txt
+          grep -Fq 'R2A5_MOCK_BROKER_TESTS_PASS count=33' /tmp/r2a5.txt
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Itools/bachata-r2a5 -Itools/bachata-r2a6 \
+            tools/bachata-r2a6/test_saf_vfs_readonly.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            tools/bachata-r2a5/saf_bsf1_client.cpp -o /tmp/r2a6-tests
+          /tmp/r2a6-tests | tee /tmp/r2a6.txt
+          grep -Fq 'R2A6_READONLY_VFS_PATH_TESTS_PASS count=35' /tmp/r2a6.txt
+      - name: Apply pinned R2A through R2A6 P1 and validate all safety guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          python3 tools/bachata-r2a6p1/apply_r2a6p1.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 8
+          grep -Fq 'AdoptReadOnlyFd' upstream/src/core/libraries/kernel/file_system.cpp
+          grep -Fq 'Guest::OpenRead' upstream/src/core/libraries/kernel/file_system.cpp
+          grep -Fq 'Guest::List' upstream/src/core/libraries/kernel/file_system.cpp
+          grep -Fq 'Guest::Stat' upstream/src/core/libraries/kernel/file_system.cpp
+          grep -Fq 'IsSafBacked' upstream/src/core/libraries/kernel/file_system.cpp
+          grep -Fq 'SafDirectory' upstream/src/core/libraries/kernel/file_system.cpp
+          grep -Fq 'Guest::Scoped' upstream/src/core/file_sys/fs.cpp
+          grep -Fq 'BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED' upstream/src/main.cpp
+          grep -Fq 'bachata-saf-vfs-lab' upstream/src/main.cpp
+          grep -Fq 'VfsRootFlag' upstream/src/platform/bachata/saf_cli_contract.h
+          test -s upstream/src/core/file_sys/directories/saf_directory.cpp
+          test -s upstream/src/platform/bachata/saf_guest_mount.cpp
+          git -C upstream diff > R2A6P1-kernel.patch
+          sha256sum R2A6P1-kernel.patch > SHA256SUMS.txt
+          printf 'status=LAB_ONLY_ANDROID_BROKER_UNTESTED\nsaf_guest_vfs=OPT_IN_OFF_BY_DEFAULT\nwrite_guards=SOURCE_VERIFIED\n' > PREVIEW-GATE.txt
+      - name: Publish source-diff audit
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p1-kernel-SOURCE-LAB-ONLY
+          path: |
+            R2A6P1-kernel.patch
+            SHA256SUMS.txt
+            PREVIEW-GATE.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  arm64-glibc-adapter:
+    needs: source-and-broker-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install AArch64 Linux cross compiler
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - name: Link scoped read-only guest mount with BSF1
+        run: |
+          set -euo pipefail
+          mkdir -p result
+          aarch64-linux-gnu-g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -fPIC -shared -Itools/bachata-r2a5 -Itools/bachata-r2a6 -Itools/bachata-r2a6p1 \
+            tools/bachata-r2a5/saf_bsf1_client.cpp \
+            tools/bachata-r2a6/saf_vfs_readonly.cpp \
+            tools/bachata-r2a6p1/saf_guest_mount.cpp \
+            -o result/libbachata_r2a6p1_guest_vfs_LAB_ONLY.so
+          readelf -h result/libbachata_r2a6p1_guest_vfs_LAB_ONLY.so > result/elf-header.txt
+          readelf -d result/libbachata_r2a6p1_guest_vfs_LAB_ONLY.so > result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' result/elf-header.txt
+          if grep -Fq 'Shared library: [liblog.so]' result/elf-dynamic.txt; then exit 6; fi
+          sha256sum result/libbachata_r2a6p1_guest_vfs_LAB_ONLY.so > result/SHA256SUMS.txt
+          printf 'target=linux-aarch64-glibc\nhost=NOT_TESTED\napk=NOT_INSTALLABLE\n' > result/PROVENANCE.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p1-aarch64-glibc-guest-mount-TEST
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
+
+  full-glibc-fex-core:
+    needs: [source-and-broker-tests, arm64-glibc-adapter]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install basic build prerequisites
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git ca-certificates python3 bash coreutils
+      - uses: actions/checkout@v4
+      - name: Fetch exact shadPS4 pinned source and recursive submodules
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > source-submodules.txt
+          if grep -E '^[+-U]' source-submodules.txt; then exit 4; fi
+      - name: Apply pinned R2A through R2A6 P1 kernel patches
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-r2/apply_r2a.py upstream
+          python3 tools/bachata-r2a2/apply_r2a2.py upstream \
+            --guard tools/bachata-r2a2/f43dev_identity_gate.h
+          python3 tools/bachata-r2a4/apply_r2a4.py upstream \
+            --header tools/bachata-r2a4/saf_cli_contract.h
+          python3 tools/bachata-r2a5/apply_r2a5.py upstream
+          python3 tools/bachata-r2a6/apply_r2a6.py upstream
+          python3 tools/bachata-r2a6p1/apply_r2a6p1.py upstream
+          git -C upstream diff --check
+          test "$(git -C upstream diff --name-only | wc -l)" = 8
+      - name: Install Debian ARM64 GLIBC/FEX dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Compile experimental R2A6 P1 full shadPS4 FEX core
+        run: |
+          set -euo pipefail
+          cd upstream
+          bash runtime/scripts/build-shadps4-arm64.sh
+          ELF=runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$ELF"
+          mkdir -p ../result
+          readelf -h "$ELF" > ../result/elf-header.txt
+          readelf -l "$ELF" > ../result/elf-program.txt
+          readelf -d "$ELF" > ../result/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' ../result/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' ../result/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' ../result/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' ../result/elf-dynamic.txt
+          if grep -Fq 'Shared library: [liblog.so]' ../result/elf-dynamic.txt; then exit 5; fi
+          grep -aFq 'bachata-saf-vfs-lab' "$ELF"
+          grep -aFq 'BACHATA_F43DEV_R2A5_BSF1_LINKED_VFS_DISABLED' "$ELF"
+          cp "$ELF" ../result/shadps4-arm64-glibc-R2A6P1-SAF-LAB-CORE
+          (cd ../result && sha256sum shadps4-arm64-glibc-R2A6P1-SAF-LAB-CORE > SHA256SUMS.txt)
+          printf 'source=be6bc2e9c60799e071dd2fafa6216e8d80ec619c\npatches=R2A,R2A2,R2A4,R2A5,R2A6,R2A6P1\nplatform=linux-glibc-arm64\nsaf_vfs=EXPERIMENTAL_OPT_IN\nandroid_real_broker=NOT_TESTED\napk_integrated=NO\noutlast_fixed=NOT_VERIFIED\nminecraft_fixed=NOT_VERIFIED\n' > ../result/PROVENANCE.txt
+      - name: Publish ELF candidate (not an APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-r2a6p1-SAF-KERNEL-LAB-ELF-NOT-APK
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
