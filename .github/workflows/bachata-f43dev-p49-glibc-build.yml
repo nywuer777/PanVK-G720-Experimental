@@ -77,7 +77,21 @@ jobs:
           ! grep -Fq 'Shared library: [liblog.so]' p49/elf-dynamic.txt
           grep -aFq 'BACHATA/1 HELLO version=2 contract=' "$elf"
           grep -aFq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' "$elf"
-          grep -aFq 'P45_BCN_PER_LAYER_VIEW_PROOF' "$elf"
+          # P45_BCN_PER_LAYER_VIEW_PROOF is a SOURCE COMMENT, not an ELF string.
+          # Validate the actual compiled image_view object and original source
+          # integration marker; never manufacture a linker-visible marker.
+          grep -Fq 'P45_BCN_PER_LAYER_VIEW_PROOF' upstream/src/video_core/texture_cache/image_view.cpp
+          grep -Fq 'BachataP44::Resolve(p45_request)' upstream/src/video_core/texture_cache/image_view.cpp
+          grep -Fq 'P45_BCN_LAYER_UPLOAD_COMPLETE' upstream/src/video_core/renderer_vulkan/p27_vk_decoded_upload.cpp
+          grep -Eq 'Building CXX object .*/video_core/texture_cache/image_view.cpp.o' p49/build.log
+          test -s upstream/runtime/build/shadps4-arm64-stage/build/CMakeFiles/shadps4.dir/src/video_core/texture_cache/image_view.cpp.o || {
+            # The upstream staging directory may change; use exact compiled
+            # object lookup under the pinned stage and reject missing/duplicates.
+            mapfile -t image_view_objects < <(find upstream/runtime/build/shadps4-arm64-stage -type f -path '*/CMakeFiles/shadps4.dir/src/video_core/texture_cache/image_view.cpp.o')
+            test "${#image_view_objects[@]}" -eq 1
+            test -s "${image_view_objects[0]}"
+          }
+          printf '%s\n' 'P45_SOURCE_AND_OBJECT_COMPILED=YES' 'P45_COMMENT_MARKER_NOT_ELF_GATED=YES' > p49/BCN-COMPILE-GATE.txt
           sha256sum "$elf" > p49/ELF-SHA256.txt
           cp "$elf" p49/shadps4-arm64-GLIBC-P49-PUBLIC-EXPERIMENTAL-NOT-APK
           printf '%s\n' \
