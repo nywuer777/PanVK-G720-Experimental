@@ -96,6 +96,7 @@ struct Stage {
         other.path.clear();
         other.private_root.clear();
         other.created_directory = false;
+        other.status = Status::NotAttempted;
     }
     Stage& operator=(Stage&& other) noexcept {
         if (this != &other) {
@@ -107,6 +108,7 @@ struct Stage {
             other.path.clear();
             other.private_root.clear();
             other.created_directory = false;
+        other.status = Status::NotAttempted;
         }
         return *this;
     }
