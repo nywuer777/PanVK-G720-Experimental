@@ -44,7 +44,7 @@ def patched(source: str) -> str:
             raise ValueError("P54_HOST_V2_P53_BSF1_PREREQUISITE_MISSING")
     if source.count(INCLUDE) != 1 or source.count(ANCHOR) != 1:
         raise ValueError("P54_UNEXPECTED_MAIN_GAMEPATH_ANCHOR")
-    if "BACHATA_P54_BSF1_EBOOT_" in source:
+    if "p54_eboot_fd.emplace" in source:
         raise ValueError("P54_ALREADY_PATCHED")
     return source.replace(INCLUDE, INCLUDE_NEW, 1).replace(ANCHOR, NEW, 1)
 
