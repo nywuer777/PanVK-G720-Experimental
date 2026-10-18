@@ -61,6 +61,8 @@ void AppendBe32(std::vector<uint8_t>& data, uint32_t value) {""",
         raise ValueError("P57 safe request validation missing")
     if "BACHATA_P57_BSF1_HEADER_PEER_RESET" not in bridge:
         raise ValueError("P57 broker error diagnostics missing")
+    bridge = one(bridge, "#include <filesystem>", "#include <filesystem>\n#include <iostream>",
+                 "Header self-contained logging include")
     bridge = one(
         bridge,
         """    auto supplied = broker.OpenRead("eboot.bin");""",
