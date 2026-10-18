@@ -1,0 +1,51 @@
+name: P56 BSF1 response frame classification (synthetic, NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p56-bsf1-frame-classification]
+    paths:
+      - 'tools/bachata-p56/**'
+      - '.github/workflows/bachata-f43dev-p56-frame-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bsf1-safe-frame-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deterministic strict source patch and preserved wire format
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p56 python3 -m unittest discover \
+            -s tools/bachata-p56 -p 'test_*.py' -v
+      - name: Compile authenticated mock broker with the actual patched R2A5 client
+        run: |
+          set -euo pipefail
+          mkdir -p p56-lab/src/platform/bachata
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, "tools/bachata-p56")
+          from patch_p56 import patch
+          base=Path("p56-lab/src/platform/bachata")
+          source=[
+            Path("tools/bachata-r2a5/saf_bsf1_client.h"),
+            Path("tools/bachata-r2a5/saf_bsf1_client.cpp"),
+            Path("tools/bachata-p54/p54_bsf1_eboot.h"),
+          ]
+          for name,contents in zip([p.name for p in source],patch(*(p.read_text() for p in source))):
+            (base/name).write_text(contents)
+          PY
+          g++ -std=c++20 -Wall -Wextra -Werror -pedantic -O2 -pthread \
+            -Ip56-lab/src \
+            tools/bachata-p56/test_mock_bsf1_frames.cpp \
+            p56-lab/src/platform/bachata/saf_bsf1_client.cpp \
+            -o p56-lab/test-frames
+          p56-lab/test-frames
+          printf '%s\n' \
+            'P56_BSF1_FRAME_NEGATIVE_TESTS=PASS' \
+            'P56_BSF1_VALID_FD_BASELINE=PASS' \
+            'P56_ACTUAL_ANDROID_BROKER=NOT_TESTED' \
+            'P56_ORIGINAL_P42_BINARY=UNMODIFIED' \
+            'P56_BCN_PANVK=UNMODIFIED' >> "$GITHUB_STEP_SUMMARY"
