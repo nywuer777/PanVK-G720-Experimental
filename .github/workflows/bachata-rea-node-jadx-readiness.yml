@@ -11,7 +11,7 @@ permissions:
 jobs:
   rea-660-jadx-configuration:
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,7 +33,7 @@ jobs:
           # Doctor is the authoritative provider readiness result (exit 0).
           # Never upload the raw provider diagnostics or private binaries.
           printf '%s\n' \
-            'REA_VERSION=6.6.0' \
+            'REA_VERSION=6.6.0_GITHUB_RELEASE_2c4338db' \
             'REA_NODE_VERSION=22.19.0' \
             'REA_JDK_VERSION=21' \
             'REA_JADX_MCP_JAR_VERSION=0.7.1' \
@@ -57,7 +57,7 @@ jobs:
         if: success()
         run: |
           printf '%s\n' \
-            'REA_6_6_0_INSTALL_AND_JADX_PROVIDER_READINESS=VERIFIED_IN_EPHEMERAL_CI' \
+            'REA_6_6_0_GITHUB_SOURCE_BUILD_AND_JADX_PROVIDER_READINESS=VERIFIED_IN_EPHEMERAL_CI' \
             'REA_LOCAL_NODE_22_16_0=NOT_COMPATIBLE_UNTIL_UPDATED' \
             'PRIVATE_APK_ANALYSIS=NOT_PERFORMED' \
             'P53_BUILD=INDEPENDENT' >> "$GITHUB_STEP_SUMMARY"
