@@ -29,6 +29,20 @@ jobs:
           test "$rc" -eq 2
           grep -Fq '"status": "BLOCKED_P42_PRIVATE_ELF_NOT_AVAILABLE"' p48-blocked.json
           grep -Fq '"apk_built": false' p48-blocked.json
+      - name: Validate P48 bounded source-role locator (synthetic)
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p48 python3 -m unittest discover -s tools/bachata-p48 -p 'test_source_role_locator.py' -v
+          python3 -m py_compile tools/bachata-p48/source_role_locator.py
+      - name: Fail-closed without original private source tree
+        run: |
+          set -euo pipefail
+          set +e
+          python3 tools/bachata-p48/source_role_locator.py --report p48-source-blocked.json
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          grep -Fq '"status": "BLOCKED_AUTHORIZED_SOURCE_TREE_UNAVAILABLE"' p48-source-blocked.json
       - name: Preserve P47 recovery policy (12 tests)
         run: |
           set -euo pipefail
@@ -44,7 +58,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: p48-read-only-provenance-blocked-evidence-NOT-APK
-          path: p48-blocked.json
+          path: |
+            p48-blocked.json
+            p48-source-blocked.json
           retention-days: 14
           if-no-files-found: warn
       - name: P48 reports evidence limits
