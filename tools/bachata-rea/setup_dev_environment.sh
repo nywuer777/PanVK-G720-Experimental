@@ -19,14 +19,22 @@ if ! java --list-modules 2>/dev/null | grep -q '^jdk.compiler@'; then
 fi
 mkdir -p "$BACHATA_REA_HOME"
 chmod 700 "$BACHATA_REA_HOME"
-if [[ -e "$BACHATA_REA_HOME/node_modules/rea-agents/package.json" ]]; then
-  echo 'REA_EXISTING_INSTALL_PREVENTS_SILENT_UPGRADE' >&2; exit 6
+# REA 6.6.0 official GitHub release is pinned to this exact Git commit.
+# As of this CI run the npm registry did not publish 6.6.0 (ETARGET).
+SOURCE="$BACHATA_REA_HOME/rea-src"
+if [[ -e "$SOURCE" ]]; then
+  echo 'REA_EXISTING_SOURCE_PREVENTS_SILENT_UPDATE' >&2; exit 6
 fi
-echo 'REA_SETUP_INSTALL_PINNED_PACKAGE_V6_6_0'
-npm install --prefix "$BACHATA_REA_HOME" --no-audit --no-fund \
-  --package-lock=true --save-exact 'rea-agents@6.6.0'
-CLI="$BACHATA_REA_HOME/node_modules/rea-agents/scripts/rea.mjs"
+echo 'REA_SETUP_CLONE_PINNED_OFFICIAL_GITHUB_RELEASE_V6_6_0'
+git clone --depth 1 --branch rea-agents-6.6.0 https://github.com/morluto/rea.git "$SOURCE"
+[[ "$(git -C "$SOURCE" rev-parse HEAD)" == "2c4338db1fdb7773e05376301c558cff2a0b4b80" ]] || {
+  echo 'REA_GITHUB_RELEASE_COMMIT_DRIFT' >&2; exit 7
+}
+git -C "$SOURCE" submodule update --init --recursive --depth 1
+(cd "$SOURCE"; npm ci --no-audit --no-fund; npm run build:cached)
+CLI="$SOURCE/scripts/rea.mjs"
 test -s "$CLI"
+test -s "$SOURCE/dist/cli-runtime/cli.js"
 node "$CLI" --version
 mkdir -p "$BACHATA_REA_HOME/android"
 JAR="$BACHATA_REA_HOME/android/jadx-headless-mcp-0.7.1-all.jar"
