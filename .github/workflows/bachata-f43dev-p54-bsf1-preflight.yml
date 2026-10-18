@@ -36,3 +36,24 @@ jobs:
             'P54_P42_PRIVATE_APK=NOT_MODIFIED' \
             'P54_REAL_ANDROID_BROKER=NOT_TESTED' \
             'P54_OUTLAST_GAMEPLAY=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
+      - name: Package P54 non-sensitive reproducible sources and negative evidence
+        run: |
+          set -euo pipefail
+          mkdir -p p54-source-evidence
+          cp tools/bachata-p54/README.md tools/bachata-p54/p54_bsf1_eboot.h \
+            tools/bachata-p54/patch_p54.py tools/bachata-p54/test_patch.py \
+            tools/bachata-p54/test_bsf1_eboot.cpp p54-source-evidence/
+          printf '%s\n' \
+            'P54_AUTHENTICATED_FAKE_BROKER_FD_TEST=PASS' \
+            'P54_UNDERLYING_R2A5_CLIENT=USED_UNMODIFIED' \
+            'P54_REAL_ANDROID_BROKER=UNVERIFIED' \
+            'P54_FULL_GAME_VFS=NOT_IMPLEMENTED' \
+            'P54_ANDROID_APK=NOT_CREATED_BY_THIS_WORKFLOW' > p54-source-evidence/P54-SCOPE.txt
+          (cd p54-source-evidence && sha256sum README.md p54_bsf1_eboot.h \
+            patch_p54.py test_patch.py test_bsf1_eboot.cpp P54-SCOPE.txt > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p54-first-eboot-bsf1-source-and-mock-evidence-NOT-APK
+          path: p54-source-evidence/
+          retention-days: 14
+
