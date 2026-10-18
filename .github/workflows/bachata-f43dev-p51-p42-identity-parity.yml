@@ -57,8 +57,8 @@ jobs:
             'P51_SIGNER_CERT_GUARD_NOT_WEAKENED=YES' \
             'P51_APK_CREATED=NO' \
             'P51_OUTLAST_FIXED=NOT_VERIFIED' >p51-evidence/P51-RELEASE-DECISION.txt
-          sha256sum p51-evidence/P51-P42-P49-PARITY.json \
-            p51-evidence/P51-RELEASE-DECISION.txt > p51-evidence/SHA256SUMS.txt
+          (cd p51-evidence && sha256sum P51-P42-P49-PARITY.json \
+            P51-RELEASE-DECISION.txt > SHA256SUMS.txt)
       - if: always()
         uses: actions/upload-artifact@v4
         with:
