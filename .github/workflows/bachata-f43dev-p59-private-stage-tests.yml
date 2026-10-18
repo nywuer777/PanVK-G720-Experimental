@@ -1,0 +1,45 @@
+name: P59 private ELF staging from authenticated BSF1 FD (mock, NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p59-private-eboot-stage]
+    paths:
+      - 'tools/bachata-p59/**'
+      - '.github/workflows/bachata-f43dev-p59-private-stage-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fd-private-staging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict main.cpp patch anchor tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p59 python3 -m unittest discover \
+            -s tools/bachata-p59 -p 'test_*.py' -v
+      - name: C++20 tests for file copying, exclusive permissions and cleanup
+        run: |
+          set -euo pipefail
+          mkdir -p p59-lab/src/platform/bachata
+          cp tools/bachata-p59/p59_private_stage.h \
+            p59-lab/src/platform/bachata/p59_private_stage.h
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ip59-lab/src tools/bachata-p59/test_private_stage.cpp \
+            -o p59-lab/test-stage
+          p59-lab/test-stage
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ip59-lab/src tools/bachata-p59/test_private_stage.cpp \
+            -o p59-lab/test-stage-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            p59-lab/test-stage-sanitized
+          printf '%s\n' \
+            'P59_PRIVATE_FD_STAGE_COPY_BYTE_FOR_BYTE=PASS_MOCK' \
+            'P59_PRIVATE_TEMP_PERMISSIONS_0600=PASS_MOCK' \
+            'P59_UNSAFE_ROOT_AND_OVERSIZE=REJECTED' \
+            'P59_FD_SOURCE_REOPEN_THROUGH_PROCFS=DISABLED' \
+            'P59_ANDROID_DEVICE_FD_READ=NOT_TESTED' \
+            'P59_ORIGINAL_P42=UNCHANGED' \
+            'P59_GUEST_APP0_VFS=NOT_YET_IMPLEMENTED' >> "$GITHUB_STEP_SUMMARY"
