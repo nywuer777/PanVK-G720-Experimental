@@ -3,7 +3,9 @@
 // Never copy into a public directory. No content, paths, FD or token in logs.
 // Deliberately does not implement the PS4 /app0 guest filesystem.
 #pragma once
+#include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
