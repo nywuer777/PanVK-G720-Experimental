@@ -119,8 +119,8 @@ def integrate(repo: Path, source: Path, kit_source: Path, result_path: Path) -> 
     # A clean P45-generated patch may only be applied if every original hunk
     # matches the R2A6P5-modified checkout; incompatible hunks fail closed.
     run(["git", "apply", "--check", "--whitespace=error",
-         str(require_patch)], source)
-    run(["git", "apply", "--whitespace=error", str(require_patch)], source)
+         str(require_patch.resolve())], source)
+    run(["git", "apply", "--whitespace=error", str(require_patch.resolve())], source)
     run(["git", "diff", "--check"], source)
     result = verify_markers(source)
     result["source_pin"] = PIN
