@@ -21,7 +21,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           run-id: 39089770038
-          github-token: ${'$'}{{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           name: p49-unified-hostv2-bcn-glibc-public-core-NOT-APK
           path: p50-input
       - name: Full ELF ABI audit with hardcoded build hash
@@ -61,7 +61,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           run-id: 39089770038
-          github-token: ${'$'}{{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           name: p49-unified-hostv2-bcn-glibc-public-core-NOT-APK
           path: p50-input
       - name: QEMU and AArch64 GLIBC user-mode libraries
