@@ -53,6 +53,22 @@ jobs:
           echo '676ec08289ad8c0dccc1985054b2e7a294b6cb07a493e6da7bf80b9e6b3ddadf  tools/bachata-p46/source-kit.tar.xz' | sha256sum -c -
           mkdir kit && tar -xJf tools/bachata-p46/source-kit.tar.xz -C kit
           (cd kit && python3 -m unittest -v test_p46_portable.py)
+      - name: Package reproducible P48 source-only forensics kit
+        run: |
+          set -euo pipefail
+          tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
+            --exclude='__pycache__' --exclude='*.pyc' \
+            -cJf p48-source-kit.tar.xz tools/bachata-p48
+          sha256sum p48-source-kit.tar.xz > p48-source-kit.tar.xz.sha256
+      - name: Upload P48 read-only source kit (NOT APK)
+        uses: actions/upload-artifact@v4
+        with:
+          name: p48-f43dev-source-forensics-kit-NOT-APK
+          path: |
+            p48-source-kit.tar.xz
+            p48-source-kit.tar.xz.sha256
+          retention-days: 14
+          if-no-files-found: error
       - name: Retain blocked proof only - no ELF binary
         if: always()
         uses: actions/upload-artifact@v4
