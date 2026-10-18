@@ -32,8 +32,15 @@ class IntakeFailure(ValueError):
 def safe_member(name: str) -> bool:
     if not name.startswith(PREFIX) or "\x00" in name or "\\" in name:
         return False
+    # PurePosixPath normalizes repeated separators and /./, so also inspect
+    # the original path components before trusting its canonicalized view.
+    raw_parts = name.split("/")
+    if any(p in ("..", ".") for p in raw_parts):
+        return False
+    if any(p == "" for p in raw_parts[:-1]):
+        return False
     path = PurePosixPath(name)
-    if path.is_absolute() or ".." in path.parts or "." in path.parts:
+    if path.is_absolute():
         return False
     return len(path.parts) >= 1
 
