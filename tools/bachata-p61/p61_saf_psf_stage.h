@@ -94,8 +94,8 @@ struct Stage {
     Stage(const Stage&)=delete;
     Stage& operator=(const Stage&)=delete;
     Stage(Stage&& o) noexcept
-        :status(o.status),path(std::move(o.path)),root(std::move(o.root)),
-          created_dir(o.created_dir),format_evidence(o.format_evidence) {
+        :status(o.status),format_evidence(o.format_evidence),
+          path(std::move(o.path)),root(std::move(o.root)),created_dir(o.created_dir) {
         o.format_evidence={};
         o.path.clear();o.root.clear();o.created_dir=false;o.status=Status::NotAttempted;
     }
