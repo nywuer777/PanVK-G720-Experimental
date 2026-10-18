@@ -1,0 +1,75 @@
+name: P51 Verify P49 vs P42 private signer-core compatibility (NO APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p51-p42-identity-parity]
+    paths:
+      - 'tools/bachata-p51/**'
+      - '.github/workflows/bachata-f43dev-p51-p42-identity-parity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  private-host-release-no-go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run 19 fail-closed synthetic parity regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p51 python3 -m unittest discover \
+            -s tools/bachata-p51 -p 'test_*.py' -v
+      - name: Download immutable P49 real public ELF
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 39089770038
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: p49-unified-hostv2-bcn-glibc-public-core-NOT-APK
+          path: p51-p49
+      - name: Compare real ELF .text and private P42 baseline invariants
+        run: |
+          set -euo pipefail
+          mkdir -p p51-evidence
+          python3 tools/bachata-p51/p42_p49_identity_parity.py \
+            --public-elf p51-p49/shadps4-arm64-GLIBC-P49-PUBLIC-EXPERIMENTAL-NOT-APK \
+            --out p51-evidence/P51-P42-P49-PARITY.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('p51-evidence/P51-P42-P49-PARITY.json')
+          d=json.loads(p.read_text())
+          assert d["verdict"]=="REJECT_PUBLIC_P49_AS_DROP_IN_P42_CORE", d
+          assert d["tested_real_public_elf_sha256"]=="272024fe15b7785be819f7fe3eb403c0543b070da2a6525d10580e24876dadaa"
+          assert d["tested_public_text_sha256"]=="bfa4914b56a6246219a13666045b0bf89e778a24f295373a6fbc02a9d44b66dd"
+          assert d["p42_private_text_reference_sha256"]=="f71b3ac83bb350f7de2835e3f4037b9d95d3fc080f1d9781e2271549f7964157"
+          assert not d["public_private_v2_identity_guard_literal_present"]
+          assert not d["public_private_bcn_fallback_literal_present"]
+          assert d["public_hello_v2_frame_present"]
+          assert not d["apk_promotion_authorized"]
+          assert not d["private_core_raw_bytes_verified"]
+          PY
+          printf '%s\n' \
+            'P51_PUBLIC_ELF_CHECKSUM=VERIFIED' \
+            'P51_P49_TEXT_SECTION=VERIFIED_DIFFERENT_FROM_P42' \
+            'P51_PRIVATE_IDENTITY_COMPATIBILITY=BLOCKED' \
+            'P51_REAL_PRIVATE_APK=NOT_AVAILABLE_IN_THIS_CI' \
+            'P51_SIGNER_CERT_GUARD_NOT_WEAKENED=YES' \
+            'P51_APK_CREATED=NO' \
+            'P51_OUTLAST_FIXED=NOT_VERIFIED' >p51-evidence/P51-RELEASE-DECISION.txt
+          sha256sum p51-evidence/P51-P42-P49-PARITY.json \
+            p51-evidence/P51-RELEASE-DECISION.txt > p51-evidence/SHA256SUMS.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p51-real-elf-p42-private-release-blocker-NOT-APK
+          path: p51-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Explicitly keep P42 signed APK untouched
+        run: |
+          printf '%s\n' \
+            'P51_RESULT=COMPARISON_REPRODUCED' \
+            'P51_PRIVATE_P42_IDENTITY=NOT_PARITY' \
+            'P51_NO_APK_PROMOTION=ENFORCED' \
+            'P51_P42_SIGNED_APK=UNCHANGED' >> "$GITHUB_STEP_SUMMARY"
