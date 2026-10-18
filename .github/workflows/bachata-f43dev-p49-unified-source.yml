@@ -1,0 +1,70 @@
+name: P49 Host V2 + BCn unified public source compatibility (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p49-unified-hostv2-bcn]
+    paths:
+      - 'tools/bachata-p49/**'
+      - '.github/workflows/bachata-f43dev-p49-unified-source.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  integration-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: P49 negative gate regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p49 python3 -m unittest discover -s tools/bachata-p49 -p 'test_*.py' -v
+      - name: Strict source kit integrity and unpack
+        run: |
+          set -euo pipefail
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          echo '9614c70a68c7257c8ba6c64ebfeaf3aeb2bc25878397714539621886761d0eb2  tools/bachata-p39/source-delta.tar.xz' | sha256sum -c -
+          echo 'd0c9847836489ac03c5604b9ab391dd3cc2c7db43c363a75f24cd89d44c6c6dd  tools/bachata-p45/source-delta.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          for i in tools/bachata-p36/source-kit.tar.xz tools/bachata-p37/source-delta.tar.xz tools/bachata-p38/source-delta.tar.xz tools/bachata-p39/source-delta.tar.xz tools/bachata-p45/source-delta.tar.xz; do
+            tar -xJf "$i" -C kit
+          done
+      - name: Check existing Host V2 and P45 independent tests
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Itools/bachata-r2a6p5 \
+            tools/bachata-r2a6p5/test_f43dev_contract_v2.cpp -o /tmp/p49-hello
+          /tmp/p49-hello
+          cd kit/source
+          python3 -m unittest -q test_port_p45.py
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. \
+            test_p44.cpp -o /tmp/p49-bcn
+          /tmp/p49-bcn
+      - name: Clone exact public source and combine Host V2 and P45 paths
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          mkdir -p p49
+          python3 tools/bachata-p49/integrate_public_hostv2_p45.py \
+            --repo . --source-root upstream --kit-source kit/source \
+            --result p49/combine.json
+          git -C upstream diff --check
+          git -C upstream diff > p49/combined-tracked.diff
+          git -C upstream status --short > p49/changed-files.txt
+          sha256sum p49/combined-tracked.diff > p49/SHA256SUMS.txt
+          grep -Fq '"public_hostv2_plus_bcn_combination": true' p49/combine.json
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p49-source-compatibility-evidence-NOT-APK
+          path: |
+            p49/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Source-only conclusions
+        run: |
+          printf '%s\n' 'P49_COMBINED_PUBLIC_SOURCE=PREFLIGHT_ONLY' \
+            'P49_PRIVATE_P42_REBUILT=NO' 'P49_SIGNED_APK=NO' \
+            'P49_OUTLAST_FIXED_ON_DEVICE=NO' >> "$GITHUB_STEP_SUMMARY"
