@@ -1,0 +1,63 @@
+name: Bachata Mali REA 6.6.0 live Node/JADX readiness (no APK)
+on:
+  push:
+    branches: [exp/bachata-mali-rea-6-6-0-devtools]
+    paths:
+      - 'tools/bachata-rea/setup_dev_environment.sh'
+      - '.github/workflows/bachata-rea-node-jadx-readiness.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rea-660-jadx-configuration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Bootstrap isolated pinned REA 6.6.0 CLI and official JADX bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          java -version
+          export BACHATA_REA_HOME="$RUNNER_TEMP/bachata-rea-660"
+          bash tools/bachata-rea/setup_dev_environment.sh
+          test -s "$BACHATA_REA_HOME/doctor-jadx.json"
+          # Doctor is the authoritative provider readiness result (exit 0).
+          # Never upload the raw provider diagnostics or private binaries.
+          printf '%s\n' \
+            'REA_VERSION=6.6.0' \
+            'REA_NODE_VERSION=22.19.0' \
+            'REA_JDK_VERSION=21' \
+            'REA_JADX_MCP_JAR_VERSION=0.7.1' \
+            'REA_JADX_JAR_PINNED_SHA256=VERIFIED' \
+            'REA_JADX_DOCTOR=PASS' \
+            'REA_MCP_CHATGPT_SESSION_CONNECTED=NO' \
+            'REA_ANDROID_BACHATA_PRIVATE_APK_INSPECTED=NO' \
+            'REA_GHIDRA_NATIVE_PROVIDER=NOT_CONFIGURED' \
+            'REA_P42_OR_P53_MODIFIED=NO' > rea-setup-summary.txt
+          sha256sum rea-setup-summary.txt > rea-setup-summary.sha256
+      - name: Publish only sanitized toolchain readiness report
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bachata-mali-rea660-jadx-toolchain-ready-NOT-APK
+          path: |
+            rea-setup-summary.txt
+            rea-setup-summary.sha256
+          retention-days: 14
+      - name: Report bounded capability to project
+        if: success()
+        run: |
+          printf '%s\n' \
+            'REA_6_6_0_INSTALL_AND_JADX_PROVIDER_READINESS=VERIFIED_IN_EPHEMERAL_CI' \
+            'REA_LOCAL_NODE_22_16_0=NOT_COMPATIBLE_UNTIL_UPDATED' \
+            'PRIVATE_APK_ANALYSIS=NOT_PERFORMED' \
+            'P53_BUILD=INDEPENDENT' >> "$GITHUB_STEP_SUMMARY"
