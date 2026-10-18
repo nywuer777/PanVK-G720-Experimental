@@ -43,8 +43,9 @@ Error RecvAllWithFd(int fd,""","receiver classifier")
     return ClassifyReceiveErrnoImpl(saved_errno, payload_stage);
 }
 ReadFd::~ReadFd() {""","testable pure classifier")
-    b=one(b,"    BrokerHeaderAncillary,",
-        """    BrokerHeaderAncillary, BrokerHeaderPeerReset, BrokerHeaderWaitExpired,
+    b=one(b,"    BrokerHeaderClosed, BrokerHeaderSyscall, BrokerHeaderAncillary,",
+        """    BrokerHeaderClosed, BrokerHeaderSyscall, BrokerHeaderAncillary,
+    BrokerHeaderPeerReset, BrokerHeaderWaitExpired,
     BrokerHeaderPolicyDenied, BrokerHeaderSyscallUnavailable,
     BrokerHeaderBadDescriptor, BrokerHeaderInvalidArgument,""","bridge enum")
     b=one(b,
