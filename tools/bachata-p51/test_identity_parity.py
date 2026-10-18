@@ -93,7 +93,7 @@ class TestParity(unittest.TestCase):
                 identify(link,P49_SHA)
     def test_wrong_sha_bails_before_elf_parse(self):
         with tempfile.TemporaryDirectory() as t:
-            p=Path(t)/"elf";p.write_bytes(b"random")
+            p=Path(t)/"elf";p.write_bytes(b"random"+b"\0"*128)
             with patch("p42_p49_identity_parity.section_inventory") as parser:
                 with self.assertRaisesRegex(ValueError,"BINARY_HASH_DOES_NOT_MATCH"):
                     identify(p,P49_SHA)
