@@ -77,8 +77,14 @@ public:
 private:
     int fd_;
 };
+struct FormatEvidence {
+    std::uint32_t entry_index=0;
+    std::uint16_t raw_format=0;
+    bool available=false;
+};
 struct Stage {
     Status status=Status::NotAttempted;
+    FormatEvidence format_evidence{};
     std::filesystem::path path, root;
     bool created_dir=false;
     Stage()=default;
@@ -89,13 +95,15 @@ struct Stage {
     Stage& operator=(const Stage&)=delete;
     Stage(Stage&& o) noexcept
         :status(o.status),path(std::move(o.path)),root(std::move(o.root)),
-          created_dir(o.created_dir) {
+          created_dir(o.created_dir),format_evidence(o.format_evidence) {
+        o.format_evidence={};
         o.path.clear();o.root.clear();o.created_dir=false;o.status=Status::NotAttempted;
     }
     Stage& operator=(Stage&& o) noexcept {
         if(this!=&o) {
             Cleanup();status=o.status;path=std::move(o.path);root=std::move(o.root);
-            created_dir=o.created_dir;o.path.clear();o.root.clear();
+            created_dir=o.created_dir;format_evidence=o.format_evidence;
+            o.format_evidence={};o.path.clear();o.root.clear();
             o.created_dir=false;o.status=Status::NotAttempted;
         }
         return *this;
@@ -130,7 +138,8 @@ inline bool ValidTitle(std::string_view v) {
 // terminated string, not necessarily the full param_len field. Reject any
 // malformed entries *before* upstream PSF::Open reads pointer-based values.
 // Only status categories are logged; never log game strings or SAF tokens.
-inline Status ValidatePsf(std::span<const unsigned char> b,std::string_view expected) {
+inline Status ValidatePsf(std::span<const unsigned char> b,std::string_view expected,
+                          FormatEvidence* evidence=nullptr) {
     if(!ValidTitle(expected)) return Status::InvalidTitleIdFormat;
     if(b.size()<20 || b[0]!=0 || b[1]!='P' || b[2]!='S' || b[3]!='F')
         return Status::InvalidPsfMagic;
@@ -165,7 +174,13 @@ inline Status ValidatePsf(std::span<const unsigned char> b,std::string_view expe
             if(!zero) return Status::InvalidPsfText;
         } else if(fmt==0x0404) {
             if(len!=4) return Status::InvalidPsfEntryBounds;
-        } else if(fmt!=0x0004) return Status::InvalidPsfFormat;
+        } else if(fmt!=0x0004) {
+            // P63: log the numeric unsupported format and entry index only.
+            // Never log PSF strings, full file contents or SAF identifiers.
+            if(evidence) *evidence={static_cast<std::uint32_t>(i),
+                                    static_cast<std::uint16_t>(fmt),true};
+            return Status::InvalidPsfFormat;
+        }
         if(key=="TITLE_ID") {
             if(found) return Status::DuplicateTitleId;
             if(fmt!=0x0204) return Status::InvalidTitleIdFormat;
@@ -204,8 +219,13 @@ inline Stage StageAuthorizedPsf(int fd,const std::filesystem::path& trusted_root
     }
     if(source.st_size>0 && bytes.size()!=static_cast<std::size_t>(source.st_size))
         return Stage(Status::ReadFailed);
-    const auto validated=ValidatePsf(bytes,expected_title_id);
-    if(validated!=Status::Ready) return Stage(validated);
+    FormatEvidence detail{};
+    const auto validated=ValidatePsf(bytes,expected_title_id,&detail);
+    if(validated!=Status::Ready) {
+        Stage failed(validated);
+        failed.format_evidence=detail;
+        return failed;
+    }
     bool created=false;
     if(::mkdirat(root.get(),"sce_sys",0700)==0) created=true;
     else if(errno!=EEXIST) return Stage(Status::CreateDirectoryFailed);
