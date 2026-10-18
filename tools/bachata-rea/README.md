@@ -65,6 +65,29 @@ The CI workflow
 tests this setup on GitHub's Linux runner using Node 22.19.0 and JDK 21.
 CI may publish only sanitized readiness; never private APK/core bytes.
 
+## Ghidra native provider (separate opt-in)
+
+`setup_ghidra_provider.sh` only runs after `setup_dev_environment.sh`.
+It downloads the **official NSA Ghidra 12.1.4** archive
+(`Ghidra_12.1.4_build`; 569,649,598 bytes), verifies the GitHub
+release's published SHA-256
+`ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db`,
+extracts it under the isolated REA home and checks native decompiler/JDK
+compatibility through `rea doctor --provider ghidra --json`.
+
+```bash
+source "$BACHATA_REA_HOME/activate.sh"
+bash tools/bachata-rea/setup_ghidra_provider.sh
+source "$BACHATA_REA_HOME/activate.sh"
+rea doctor --provider ghidra --json
+```
+
+The independent CI run is defined in
+`.github/workflows/bachata-rea-ghidra-readiness.yml`.
+Do not claim Ghidra is ready until its full job reports success. Neither
+REA nor Ghidra is embedded into the Android application. Official Ghidra
+redistribution rights and license notices apply separately.
+
 ## Useful research tasks
 
 1. Investigate the **Android host** JNI `NativeRuntimeBridge.run`, the two
