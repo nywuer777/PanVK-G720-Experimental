@@ -1,0 +1,52 @@
+name: P48 F43DEV private ELF provenance and recovery gate (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p48-elf-forensics]
+    paths:
+      - 'tools/bachata-p48/**'
+      - '.github/workflows/bachata-f43dev-p48-elf-provenance.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  private-elf-provenance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate P48 ELF64 AArch64 GLIBC parser on synthetic files
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p48 python3 -m unittest discover -s tools/bachata-p48 -p 'test_*.py' -v
+          python3 -m py_compile tools/bachata-p48/private_elf_probe.py
+      - name: Fail-closed without original P42 private ELF
+        run: |
+          set -euo pipefail
+          set +e
+          python3 tools/bachata-p48/private_elf_probe.py --mode baseline --report p48-blocked.json
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          grep -Fq '"status": "BLOCKED_P42_PRIVATE_ELF_NOT_AVAILABLE"' p48-blocked.json
+          grep -Fq '"apk_built": false' p48-blocked.json
+      - name: Preserve P47 recovery policy (12 tests)
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p47 python3 -m unittest discover -s tools/bachata-p47 -p 'test_*.py' -v
+      - name: Preserve P46 source-readiness evidence (6 tests)
+        run: |
+          set -euo pipefail
+          echo '676ec08289ad8c0dccc1985054b2e7a294b6cb07a493e6da7bf80b9e6b3ddadf  tools/bachata-p46/source-kit.tar.xz' | sha256sum -c -
+          mkdir kit && tar -xJf tools/bachata-p46/source-kit.tar.xz -C kit
+          (cd kit && python3 -m unittest -v test_p46_portable.py)
+      - name: Retain blocked proof only - no ELF binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p48-read-only-provenance-blocked-evidence-NOT-APK
+          path: p48-blocked.json
+          retention-days: 14
+          if-no-files-found: warn
+      - name: P48 reports evidence limits
+        run: |
+          printf '%s\n' 'P48_PROVENANCE_PARSER=TESTED_ON_SYNTHETIC' 'P48_ORIGINAL_PRIVATE_SOURCE_RECOVERED=NO' 'P48_P42_PRIVATE_ELF_READ=NO' 'P48_PRIVATE_CORE_REBUILT=NO' 'P48_OUTLAST_FIXED=NO' 'P48_APK_BUILT=NO' >> "$GITHUB_STEP_SUMMARY"
