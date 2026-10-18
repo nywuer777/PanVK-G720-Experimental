@@ -55,7 +55,14 @@ jobs:
     needs: actual-p49-abi
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    container:
+      image: debian:trixie
     steps:
+      - name: Bootstrap Debian container
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates git
       - uses: actions/checkout@v4
       - name: Reuse the same approved original P49 ELF
         uses: actions/download-artifact@v4
@@ -67,9 +74,9 @@ jobs:
       - name: QEMU and AArch64 GLIBC user-mode libraries
         run: |
           set -euo pipefail
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          dpkg --add-architecture arm64
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             qemu-user libc6:arm64 libstdc++6:arm64 libudev1:arm64 libuuid1:arm64 libgcc-s1:arm64
       - name: Execute native guest, reject invalid nonce and absent managed host
         run: |
