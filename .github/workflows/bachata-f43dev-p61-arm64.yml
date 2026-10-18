@@ -1,0 +1,210 @@
+name: P61 authenticated PSF ARM64 GLIBC (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p61-psf-saf]
+    paths:
+      - '.github/workflows/bachata-f43dev-p61-arm64.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  combined-public-core-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install bootstrap packages
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates python3 bash coreutils xz-utils binutils g++
+      - uses: actions/checkout@v4
+      - name: Enforce P61 tested-source release gate
+        run: |
+          set -euo pipefail
+          # Matches exact commit of the last successful C++20 + ASAN/UBSAN P60 test re-run.
+          # The test execution is tracked at /actions/runs/39150718327 (attempt 2).
+          test -f tools/bachata-p60/p60_saf_libc_stage.h
+          test -f tools/bachata-p60/patch_p60.py
+          test -f tools/bachata-p60/test_broker_libc.cpp
+          test -f tools/bachata-p60/test_stage_libc.cpp
+          grep -Fq 'BACHATA_P60_LIBC_SAF_PRIVATE_STAGE_READY' tools/bachata-p60/p60_saf_libc_stage.h
+          grep -Fq 'P60::ProbeAndStageLibc(' tools/bachata-p60/patch_p60.py
+          test -f tools/bachata-p61/p61_saf_psf_stage.h
+          test -f tools/bachata-p61/patch_p61.py
+          test -f tools/bachata-p61/test_broker_psf.cpp
+          test -f tools/bachata-p61/test_stage_psf.cpp
+          test "$(git hash-object tools/bachata-p61/p61_saf_psf_stage.h)" = 27f3a653dfff935a087f38a663f05e3be35a5e67
+          test "$(git hash-object tools/bachata-p61/patch_p61.py)" = 25249b148b2a8d5457cd0c98d4f021cf9d77bf63
+          test "$(git hash-object tools/bachata-p61/test_stage_psf.cpp)" = cb96e72d3557fb41e65503e0582c7034f23264a7
+          test "$(git hash-object tools/bachata-p61/test_broker_psf.cpp)" = eb54903759dd3bd47cef2c87c269ec65f1cdf6b0
+          test "$(git hash-object tools/bachata-p61/test_patch.py)" = 75c0b958abdbee2bc4662b720106954637f96f91
+          printf '%s\n' 'P61_CI_MOCK_RUN=39160637979_SUCCESS' \
+            'P61_SOURCE_BLOBS_PINNED=YES' 'P61_PRIVATE_P42_SOURCE=NOT_INCLUDED' >> "$GITHUB_STEP_SUMMARY"
+      - name: Audit scripts and immutable P45 kit hashes
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p49 python3 -m unittest discover -s tools/bachata-p49 -p 'test_*.py' -v
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          echo '9614c70a68c7257c8ba6c64ebfeaf3aeb2bc25878397714539621886761d0eb2  tools/bachata-p39/source-delta.tar.xz' | sha256sum -c -
+          echo 'd0c9847836489ac03c5604b9ab391dd3cc2c7db43c363a75f24cd89d44c6c6dd  tools/bachata-p45/source-delta.tar.xz' | sha256sum -c -
+          mkdir -p kit p49
+          for f in tools/bachata-p36/source-kit.tar.xz tools/bachata-p37/source-delta.tar.xz tools/bachata-p38/source-delta.tar.xz tools/bachata-p39/source-delta.tar.xz tools/bachata-p45/source-delta.tar.xz; do tar -xJf "$f" -C kit; done
+      - name: Clone pinned upstream and FEX build dependencies
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > p49/submodule-locks.txt
+          if grep -Eq '^[+-U]' p49/submodule-locks.txt; then
+            echo 'SUBMODULE_LOCK_DRIFT' >&2
+            exit 5
+          fi
+      - name: Apply all Host V2 and P45 fixes with conflict-reviewed rebase
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-p49/integrate_public_hostv2_p45.py \
+            --repo . --source-root upstream --kit-source kit/source --result p49/combine.json
+          grep -Fq '"public_hostv2_plus_bcn_combination": true' p49/combine.json
+          grep -Fq '"r2a_storage_write_access_statically_verified": true' p49/p49-reviewed-rebase.json
+          git -C upstream diff --check
+          git -C upstream status --short > p49/changed-files.txt
+      - name: P53 independently test conservative game entry resolver
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p53 python3 -m unittest discover -s tools/bachata-p53 -p 'test_*.py' -v
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic \
+            -Itools/bachata-p53 tools/bachata-p53/test_relative_eboot.cpp -o p49/test-p53-entry
+          p49/test-p53-entry
+          python3 tools/bachata-p53/patch_p53.py --source-root upstream --header tools/bachata-p53/relative_eboot.h
+          grep -Fq 'BACHATA_P53_EBOOT_OVERRIDE_ROOT_RESOLVED' upstream/src/main.cpp
+          grep -Fq 'BACHATA_P53_EBOOT_ROOT_UNAVAILABLE' upstream/src/main.cpp
+          git -C upstream diff --check
+          python3 tools/bachata-p54/patch_p54.py --source-root upstream --header tools/bachata-p54/p54_bsf1_eboot.h
+          grep -Fq 'TryOpenInitialEboot' upstream/src/main.cpp
+          grep -Fq 'p54_eboot_fd.emplace' upstream/src/main.cpp
+          grep -Fq 'BACHATA_P55_BSF1_EBOOT_RESPONSE_FRAME_INVALID' upstream/src/platform/bachata/p54_bsf1_eboot.h
+          python3 tools/bachata-p56/patch_p56.py --source-root upstream
+          python3 tools/bachata-p57/patch_p57.py --source-root upstream
+          python3 tools/bachata-p58/patch_p58.py --source-root upstream
+          python3 tools/bachata-p59/patch_p59.py --source-root upstream \
+            --header tools/bachata-p59/p59_private_stage.h
+          python3 tools/bachata-p60/patch_p60.py --source-root upstream \
+            --header tools/bachata-p60/p60_saf_libc_stage.h
+          python3 tools/bachata-p61/patch_p61.py --source-root upstream \
+            --header tools/bachata-p61/p61_saf_psf_stage.h
+          grep -Fq 'P61::ProbeAndStageParamSfo(' upstream/src/main.cpp
+          grep -Fq 'CONTENT_METADATA_UNAVAILABLE' upstream/src/main.cpp
+          grep -Fq 'BACHATA_P61_PSF_SAF_PRIVATE_STAGE_READY' upstream/src/platform/bachata/p61_saf_psf_stage.h
+          grep -Fq 'P60::ProbeAndStageLibc(' upstream/src/main.cpp
+          grep -Fq 'BACHATA_P60_LIBC_SAF_PRIVATE_STAGE_READY' upstream/src/platform/bachata/p60_saf_libc_stage.h
+          grep -Fq 'kRelativeModule = "sce_module/libc.prx"' upstream/src/platform/bachata/p60_saf_libc_stage.h
+          grep -Fq 'P59::StageAuthenticatedFd(' upstream/src/main.cpp
+          ! grep -Fq 'ebootPath = std::move(p54_probe.proc_fd_path)' upstream/src/main.cpp
+          grep -Fq 'BACHATA_P59_EBOOT_PRIVATE_STAGE_READY' upstream/src/platform/bachata/p59_private_stage.h
+          grep -Fq 'AppendBe16(packet, static_cast<uint16_t>(config_.token.size()))' upstream/src/platform/bachata/saf_bsf1_client.cpp
+          grep -Fq 'BACHATA_P58_BSF1_REQUEST_ANDROID_WIRE_BE16_BE32' upstream/src/platform/bachata/p54_bsf1_eboot.h
+          grep -Fq 'BACHATA_P57_BSF1_HEADER_PEER_RESET' upstream/src/platform/bachata/p54_bsf1_eboot.h
+          grep -Fq 'ClassifyReceiveErrnoImpl' upstream/src/platform/bachata/saf_bsf1_client.cpp
+          grep -Fq 'BACHATA_P56_BSF1_HEADER_CLOSED' upstream/src/platform/bachata/p54_bsf1_eboot.h
+          grep -Fq 'BACHATA_P56_BSF1_HEADER_BAD_MAGIC' upstream/src/platform/bachata/p54_bsf1_eboot.h
+          grep -Fq 'Error::HeaderClosed' upstream/src/platform/bachata/saf_bsf1_client.cpp
+          git -C upstream diff --check
+      - name: Install Debian ARM64 GLIBC runtime dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Compile integrated public AArch64 GLIBC executable and verify ELF
+        run: |
+          set -euo pipefail
+          (cd upstream && bash runtime/scripts/build-shadps4-arm64.sh) >p49/build.log 2>&1 || {
+            tail -180 p49/build.log >&2
+            echo 'P49_ARM64_GLIBC_BUILD_FAILED' >&2
+            exit 6
+          }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" > p49/elf-header.txt
+          readelf -l "$elf" > p49/elf-program.txt
+          readelf -d "$elf" > p49/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p49/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' p49/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p49/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' p49/elf-dynamic.txt
+          ! grep -Fq 'Shared library: [liblog.so]' p49/elf-dynamic.txt
+          grep -aFq 'BACHATA/1 HELLO version=2 contract=' "$elf"
+          grep -aFq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' "$elf"
+          # P45_BCN_PER_LAYER_VIEW_PROOF is a SOURCE COMMENT, not an ELF string.
+          # Validate the actual compiled image_view object and original source
+          # integration marker; never manufacture a linker-visible marker.
+          grep -Fq 'P45_BCN_PER_LAYER_VIEW_PROOF' upstream/src/video_core/texture_cache/image_view.cpp
+          grep -Fq 'BachataP44::Resolve(p45_request)' upstream/src/video_core/texture_cache/image_view.cpp
+          grep -Fq 'P45_BCN_LAYER_UPLOAD_COMPLETE' upstream/src/video_core/renderer_vulkan/p27_vk_decoded_upload.cpp
+          grep -Eq 'Building CXX object .*/video_core/texture_cache/image_view.cpp.o' p49/build.log
+          # Upstream build-shadps4-arm64.sh uses build_dir=runtime/build/shadps4-arm64.
+          test -s upstream/runtime/build/shadps4-arm64/CMakeFiles/shadps4.dir/src/video_core/texture_cache/image_view.cpp.o
+          printf '%s\n' 'P45_SOURCE_AND_OBJECT_COMPILED=YES' 'P45_COMMENT_MARKER_NOT_ELF_GATED=YES' > p49/BCN-COMPILE-GATE.txt
+          grep -Fq 'BACHATA_P53_EBOOT_OVERRIDE_ROOT_RESOLVED' upstream/src/main.cpp
+          grep -aFq 'BACHATA_P53_EBOOT_OVERRIDE_ROOT_RESOLVED' "$elf"
+          grep -aFq 'BACHATA_P53_EBOOT_ROOT_UNAVAILABLE' "$elf"
+          grep -aFq 'BACHATA_P54_BSF1_EBOOT_AUTHENTICATED_FD_READY' "$elf"
+          grep -aFq 'BACHATA_P54_BSF1_EBOOT_BROKER_UNAVAILABLE' "$elf"
+          grep -aFq 'BACHATA_P54_BSF1_EBOOT_BROKER_PROTOCOL_MISMATCH' "$elf"
+          grep -aFq 'BACHATA_P55_BSF1_EBOOT_REQUEST_SEND_FAILED' "$elf"
+          grep -aFq 'BACHATA_P55_BSF1_EBOOT_RESPONSE_FRAME_INVALID' "$elf"
+          grep -aFq 'BACHATA_P55_BSF1_EBOOT_RESPONSE_PAYLOAD_INVALID' "$elf"
+          grep -aFq 'BACHATA_P56_BSF1_HEADER_CLOSED' "$elf"
+          grep -aFq 'BACHATA_P56_BSF1_HEADER_BAD_MAGIC' "$elf"
+          grep -aFq 'BACHATA_P56_BSF1_HEADER_BAD_VERSION' "$elf"
+          grep -aFq 'BACHATA_P56_BSF1_HEADER_ANCILLARY_INVALID' "$elf"
+          grep -aFq 'BACHATA_P57_BSF1_HEADER_PEER_RESET' "$elf"
+          grep -aFq 'BACHATA_P57_BSF1_HEADER_POLICY_DENIED' "$elf"
+          grep -aFq 'BACHATA_P57_BSF1_HEADER_INVALID_ARGUMENT' "$elf"
+          grep -aFq 'BACHATA_P57_BSF1_HEADER_WAIT_EXPIRED' "$elf"
+          grep -aFq 'BACHATA_P58_BSF1_REQUEST_ANDROID_WIRE_BE16_BE32' "$elf"
+          grep -aFq 'BACHATA_P59_EBOOT_PRIVATE_STAGE_READY' "$elf"
+          grep -aFq 'BACHATA_P59_EBOOT_PRIVATE_STAGE_READ_FAILED' "$elf"
+          grep -aFq 'BACHATA_P59_EBOOT_PRIVATE_STAGE_UNSAFE_ROOT' "$elf"
+          grep -aFq 'BACHATA_P60_LIBC_SAF_PRIVATE_STAGE_READY' "$elf"
+          grep -aFq 'BACHATA_P61_PSF_SAF_PRIVATE_STAGE_READY' "$elf"
+          grep -aFq 'BACHATA_P61_PSF_BROKER_STAT_REJECTED' "$elf"
+          grep -aFq 'BACHATA_P61_PSF_TITLE_ID_MISMATCH' "$elf"
+          grep -aFq 'CONTENT_METADATA_UNAVAILABLE' "$elf"
+          grep -Fq 'p61_psf_stage.emplace(std::move(psf))' upstream/src/main.cpp
+          grep -aFq 'BACHATA_P60_LIBC_BROKER_STAT_REJECTED' "$elf"
+          grep -aFq 'BACHATA_P60_LIBC_ALREADY_EXISTS_NOT_OVERWRITTEN' "$elf"
+          grep -Fq 'p60_libc_stage.emplace(std::move(libc))' upstream/src/main.cpp
+          grep -Fq 'ebootPath = p59_eboot_stage->path' upstream/src/main.cpp
+          test -s upstream/runtime/build/shadps4-arm64/CMakeFiles/shadps4.dir/src/main.cpp.o
+          test -s upstream/runtime/build/shadps4-arm64/CMakeFiles/shadps4.dir/src/platform/bachata/saf_bsf1_client.cpp.o
+          ! grep -Fq 'AppendBe32(packet, static_cast<uint32_t>(config_.token.size()))' upstream/src/platform/bachata/saf_bsf1_client.cpp
+          grep -Fq 'p54_eboot_fd.emplace' upstream/src/main.cpp
+          test -s upstream/runtime/build/shadps4-arm64/CMakeFiles/shadps4.dir/src/main.cpp.o
+          sha256sum "$elf" > p49/ELF-SHA256.txt
+          cp "$elf" p49/shadps4-arm64-GLIBC-P61-PSF-SAF-EXACT-STAGE-NOT-APK
+          printf '%s\n' \
+            'source_pin=be6bc2e9c60799e071dd2fafa6216e8d80ec619c' \
+            'host_v2_source=COMBINED' 'p45_bcn_source=COMBINED' 'p53_relative_eboot_source=COMPILED' 'p54_bsf1_initial_eboot_source=COMPILED' 'p55_diagnostic_split=COMPILED' 'p56_frame_detail=COMPILED' 'p57_errno_classification=COMPILED' 'p58_android_bsf1_wire=COMPILED' 'p59_private_stage=COMPILED' 'p60_exact_libc_saf_stage=COMPILED' 'p61_exact_psf_saf_stage=COMPILED' \
+            'target=Linux AArch64 GLIBC' 'original_p42_private_binary=NOT_REBUILT' \
+            'original_p42_signer_protocol=NOT_PROVEN' \
+            'host_android_broker=NOT_TESTED' 'outlast_fixed=NOT_VERIFIED' \
+            'apk_built=NO' > p49/PROVENANCE.txt
+      - name: Publish public experimental candidate and build evidence (not APK)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p61-saf-psf-stage-glibc-core-NOT-APK
+          path: p49/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Publication disclosure
+        run: |
+          printf '%s\n' 'P61_PUBLIC_GLIBC_CORE=BUILT' 'P61_PRIVATE_P42_CORE_REBUILT=NO' \
+            'P61_SIGNED_APK=NO' 'P61_OUTLAST_FIXED=NOT_VERIFIED' \
+            'P61_F43DEV_BOOT=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
