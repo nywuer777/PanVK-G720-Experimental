@@ -9,6 +9,7 @@ import argparse
 import json
 import subprocess
 from pathlib import Path
+from rebase_p39_shaderwrite import prepare
 
 PIN = "be6bc2e9c60799e071dd2fafa6216e8d80ec619c"
 NEEDED = {
@@ -116,11 +117,18 @@ def integrate(repo: Path, source: Path, kit_source: Path, result_path: Path) -> 
             args.append(str(repo / item) if item.startswith("tools/") else item)
         run(args, repo)
 
-    # A clean P45-generated patch may only be applied if every original hunk
-    # matches the R2A6P5-modified checkout; incompatible hunks fail closed.
+    # P39 and R2A both change the same ShaderWrite expression. Resolve only
+    # the single exact, reviewed hunk and retain R2A's broader has_storage
+    # gating. Every other P45 patch hunk is still checked strictly.
+    rebased, audit = prepare(require_patch.read_bytes(),
+                             source / "src/video_core/renderer_vulkan/vk_rasterizer.cpp")
+    rebased_path = result_path.parent / "p49-rebased-p45.patch"
+    rebased_path.write_bytes(rebased)
+    (result_path.parent / "p49-reviewed-rebase.json").write_text(
+        json.dumps(audit, indent=2, sort_keys=True) + "\n")
     run(["git", "apply", "--check", "--whitespace=error",
-         str(require_patch.resolve())], source)
-    run(["git", "apply", "--whitespace=error", str(require_patch.resolve())], source)
+         str(rebased_path.resolve())], source)
+    run(["git", "apply", "--whitespace=error", str(rebased_path.resolve())], source)
     run(["git", "diff", "--check"], source)
     result = verify_markers(source)
     result["source_pin"] = PIN
