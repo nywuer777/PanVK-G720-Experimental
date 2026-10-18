@@ -1,0 +1,35 @@
+name: Bachata Mali - REA 6.6.0 local audit intake (no private inputs)
+on:
+  push:
+    branches: [exp/bachata-mali-rea-6-6-0-devtools]
+    paths:
+      - 'tools/bachata-rea/**'
+      - '.github/workflows/bachata-rea-local-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rea-readonly-security-preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit test REA pinned-archive integrity parser without executing REA
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-rea python3 -m unittest discover -s tools/bachata-rea -p 'test_*.py' -v
+          python3 -m py_compile tools/bachata-rea/rea_intake.py
+      - name: Confirm archive, private cores and signing materials are not included
+        run: |
+          set -euo pipefail
+          if find tools/bachata-rea -type f \( -iname '*.apk' -o -iname '*.jks' \
+              -o -iname '*.keystore' -o -iname '*.p12' -o -iname '*.key' \
+              -o -iname '*.zip' -o -iname '*.so' \) | grep -q .; then
+            echo 'Private or executable artifact must not be committed' >&2
+            exit 2
+          fi
+          printf '%s\n' 'REA_ARCHIVE_USER_SUPPLIED_LOCAL_ONLY=YES' \
+            'REA_AND_NATIVE_PROVIDERS_NOT_INSTALLED_IN_CI=YES' \
+            'P42_OR_PRIVATE_APK_UPLOADED=NO' \
+            'P53_FEX_BUILD_UNCHANGED=YES' \
+            'ANDROID_APPLICATION_MODIFIED=NO' >> "$GITHUB_STEP_SUMMARY"
