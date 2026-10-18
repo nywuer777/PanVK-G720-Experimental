@@ -42,3 +42,23 @@ A branch `exp/bachata-f43dev-p60-libc-saf-preflight` contém:
 `test_stage_libc.cpp`, `test_broker_libc.cpp`,
 `test_patch.py`. Houve auditoria estática de âncoras e controles, porém
 **nenhum teste de execução P60 aprovado e nenhum APK P60 gerado**.
+
+
+## Diagnóstico conclusivo comunicado pelo proprietário
+
+O GitHub exibiu na execução \`runner-startup\`:
+> O serviço não foi iniciado porque houve falhas nos pagamentos recentes da sua conta ou porque seu limite de gastos precisa ser aumentado. Verifique a seção "Faturamento e planos" nas suas configurações.
+
+**Causa do bloqueio da CI: restrição de cobrança/orçamento da conta.**
+O aviso aponta duas condições possíveis (pagamentos recentes com falha **ou**
+limite de gastos insuficiente). Sem acesso às preferências privadas de
+faturamento da conta, não é possível determinar qual das duas se aplica.
+
+Medida necessária pelo proprietário da conta GitHub: conferir
+Settings → Billing and licensing → Payment information e Budgets and alerts,
+regularizar pendência ou elevar orçamento se apropriado, depois reexecutar
+\`runner-startup\` e somente em seguida o gate \`P60 SAF libc.prx exact-path staging\`.
+
+Nenhum alteração do código P60, do PanVK ou de autenticação do BSF1 resolve um
+bloqueio administrativo do Actions. A compilação ARM64 e a distribuição do APK
+P60 continuam **bloqueadas até testes executados de fato**.
