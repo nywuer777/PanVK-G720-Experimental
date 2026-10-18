@@ -1,0 +1,64 @@
+name: P58 match real Android BSF1 request ABI (mock, NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p58-bsf1-android-protocol]
+    paths:
+      - 'tools/bachata-p58/**'
+      - '.github/workflows/bachata-f43dev-p58-bsf1-protocol-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-android-bsf1-client:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strict source patch and 53-byte exact request frame regression
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p58 python3 -m unittest discover \
+            -s tools/bachata-p58 -p 'test_*.py' -v
+      - name: Build actual patched C++ broker client and execute FD round trip
+        run: |
+          set -euo pipefail
+          mkdir -p p58-fixture/src/platform/bachata
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          for rel in ('tools/bachata-p56','tools/bachata-p57','tools/bachata-p58'):
+              sys.path.insert(0,rel)
+          from patch_p56 import patch as p56
+          from patch_p57 import patch as p57
+          from patch_p58 import patch as p58
+          files=[
+              Path('tools/bachata-r2a5/saf_bsf1_client.h'),
+              Path('tools/bachata-r2a5/saf_bsf1_client.cpp'),
+              Path('tools/bachata-p54/p54_bsf1_eboot.h'),
+          ]
+          header,client,bridge=p57(*p56(*(x.read_text() for x in files)))
+          client,bridge=p58(client,bridge)
+          target=Path('p58-fixture/src/platform/bachata')
+          for name,data in zip(('saf_bsf1_client.h','saf_bsf1_client.cpp','p54_bsf1_eboot.h'),
+                               (header,client,bridge)):
+              (target/name).write_text(data)
+          assert 'BACHATA_P58_BSF1_REQUEST_ANDROID_WIRE_BE16_BE32' in bridge
+          PY
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ip58-fixture/src tools/bachata-p58/test_android_bsf1_wire.cpp \
+            p58-fixture/src/platform/bachata/saf_bsf1_client.cpp \
+            -o p58-fixture/p58-frame-test
+          p58-fixture/p58-frame-test
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ip58-fixture/src tools/bachata-p58/test_android_bsf1_wire.cpp \
+            p58-fixture/src/platform/bachata/saf_bsf1_client.cpp \
+            -o p58-fixture/p58-frame-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            p58-fixture/p58-frame-sanitized
+          printf '%s\n' \
+            'P58_ANDROID_BSF1_BE16_BE32_REQUEST_FRAME=PASS_MOCK' \
+            'P58_ANDROID_BROKER_REAL_CONNECTION=NOT_TESTED' \
+            'P58_P42_PRIVATE_APK=NOT_MODIFIED' \
+            'P58_PANVK_BCN=UNCHANGED' \
+            'P58_HOST_UID_AND_TOKEN_GATES=RETAINED' >> "$GITHUB_STEP_SUMMARY"
