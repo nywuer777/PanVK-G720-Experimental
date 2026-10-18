@@ -1,0 +1,73 @@
+name: P62 bounded PSF compatibility and failure diagnostics (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p62-psf-compat-diagnostics]
+    paths:
+      - 'tools/bachata-p61/**'
+      - 'tools/bachata-p62/**'
+      - '.github/workflows/bachata-f43dev-p62-psf-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  exact-param-sfo:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert strict P60-to-P61 source hooks
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p61 python3 -m unittest discover -s tools/bachata-p61 -p 'test_*.py' -v
+      - name: Compile P62 padded-title compatibility and negative cases with GCC / Clang sanitizer
+        run: |
+          set -euo pipefail
+          mkdir -p p61-fixture/src/platform/bachata
+          cp tools/bachata-p61/p61_saf_psf_stage.h p61-fixture/src/platform/bachata/
+          cp tools/bachata-r2a5/saf_bsf1_client.h p61-fixture/src/platform/bachata/
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ip61-fixture/src tools/bachata-p62/test_p62.cpp -o p61-fixture/test-stage
+          p61-fixture/test-stage
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer -Ip61-fixture/src \
+            tools/bachata-p62/test_p62.cpp -o p61-fixture/test-stage-asan
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 p61-fixture/test-stage-asan
+      - name: Test actual P58 BSF1 Stat and OpenRead against isolated mock SAF broker
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+          from pathlib import Path
+          for d in ('tools/bachata-p56','tools/bachata-p57','tools/bachata-p58'):
+              sys.path.insert(0,d)
+          from patch_p56 import patch as p56
+          from patch_p57 import patch as p57
+          from patch_p58 import patch as p58
+          h=Path('tools/bachata-r2a5/saf_bsf1_client.h').read_text()
+          c=Path('tools/bachata-r2a5/saf_bsf1_client.cpp').read_text()
+          b=Path('tools/bachata-p54/p54_bsf1_eboot.h').read_text()
+          h,c,b=p57(*p56(h,c,b))
+          c,b=p58(c,b)
+          out=Path('p61-fixture/src/platform/bachata')
+          for name,content in (('saf_bsf1_client.h',h),('saf_bsf1_client.cpp',c),('p54_bsf1_eboot.h',b)):
+              (out/name).write_text(content)
+          assert 'SameUidPeer(sock.get())' in c
+          assert 'MSG_CMSG_CLOEXEC' in c
+          assert 'AppendBe16(packet, static_cast<uint16_t>(config_.token.size()))' in c
+          PY
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ip61-fixture/src tools/bachata-p61/test_broker_psf.cpp \
+            p61-fixture/src/platform/bachata/saf_bsf1_client.cpp -o p61-fixture/test-broker
+          p61-fixture/test-broker
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ip61-fixture/src tools/bachata-p61/test_broker_psf.cpp \
+            p61-fixture/src/platform/bachata/saf_bsf1_client.cpp -o p61-fixture/test-broker-asan
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            p61-fixture/test-broker-asan
+          grep -Fq 'BACHATA_P62_PSF_TITLE_ID_FORMAT' tools/bachata-p61/p61_saf_psf_stage.h
+          printf '%s\n' 'P62_PADDED_TITLE_ID_UPSTREAM_COMPAT=PASS' 'P62_DETAILED_INVALID_PSF=PASS' 'P61_EXACT_SCE_SYS_PARAM_SFO=PASS_MOCK' \
+            'P61_TITLE_ID_PARSED_AND_MATCHED=PASS_MOCK' \
+            'P61_FAIL_CLOSED_NO_SYNTHETIC_METADATA=PASS_MOCK' \
+            'P61_P42_AND_PANVK=UNMODIFIED' \
+            'P61_ANDROID_HARDWARE=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
