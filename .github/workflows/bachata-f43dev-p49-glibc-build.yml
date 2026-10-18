@@ -1,0 +1,102 @@
+name: P49 Host V2 + BCn combined ARM64 GLIBC core (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p49-unified-hostv2-bcn]
+    paths:
+      - '.github/workflows/bachata-f43dev-p49-glibc-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  combined-public-core-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: debian:trixie
+    steps:
+      - name: Install bootstrap packages
+        run: |
+          set -euo pipefail
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git ca-certificates python3 bash coreutils xz-utils binutils g++
+      - uses: actions/checkout@v4
+      - name: Audit scripts and immutable P45 kit hashes
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p49 python3 -m unittest discover -s tools/bachata-p49 -p 'test_*.py' -v
+          echo 'ca072f43d63385b62d7411bb77a80f82e8dc1aded237a07c70c91ce38340ee39  tools/bachata-p36/source-kit.tar.xz' | sha256sum -c -
+          echo '366e259058f9e0ef3608f0fd67b5d3e11bc8096e85040199cb486568e2a92c80  tools/bachata-p37/source-delta.tar.xz' | sha256sum -c -
+          echo 'a74edea8081197971d30505ce89caf50dbcd1be6c47d81a9338a0b839bf6ea14  tools/bachata-p38/source-delta.tar.xz' | sha256sum -c -
+          echo '9614c70a68c7257c8ba6c64ebfeaf3aeb2bc25878397714539621886761d0eb2  tools/bachata-p39/source-delta.tar.xz' | sha256sum -c -
+          echo 'd0c9847836489ac03c5604b9ab391dd3cc2c7db43c363a75f24cd89d44c6c6dd  tools/bachata-p45/source-delta.tar.xz' | sha256sum -c -
+          mkdir -p kit p49
+          for f in tools/bachata-p36/source-kit.tar.xz tools/bachata-p37/source-delta.tar.xz tools/bachata-p38/source-delta.tar.xz tools/bachata-p39/source-delta.tar.xz tools/bachata-p45/source-delta.tar.xz; do tar -xJf "$f" -C kit; done
+      - name: Clone pinned upstream and FEX build dependencies
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/zenithblue-oss/shadps4-arm64.git upstream
+          git -C upstream checkout --detach be6bc2e9c60799e071dd2fafa6216e8d80ec619c
+          git -C upstream submodule update --init --recursive --jobs 8
+          git -C upstream submodule status --recursive > p49/submodule-locks.txt
+          if grep -Eq '^[+-U]' p49/submodule-locks.txt; then
+            echo 'SUBMODULE_LOCK_DRIFT' >&2
+            exit 5
+          fi
+      - name: Apply all Host V2 and P45 fixes with conflict-reviewed rebase
+        run: |
+          set -euo pipefail
+          python3 tools/bachata-p49/integrate_public_hostv2_p45.py \
+            --repo . --source-root upstream --kit-source kit/source --result p49/combine.json
+          grep -Fq '"public_hostv2_plus_bcn_combination": true' p49/combine.json
+          grep -Fq '"r2a_storage_write_access_statically_verified": true' p49/p49-reviewed-rebase.json
+          git -C upstream diff --check
+          git -C upstream status --short > p49/changed-files.txt
+      - name: Install Debian ARM64 GLIBC runtime dependencies
+        run: |
+          set -euo pipefail
+          cd upstream
+          BACHATA_INSIDE_DEBIAN_CONTAINER=1 bash runtime/scripts/install-debian-runtime-deps.sh
+      - name: Compile integrated public AArch64 GLIBC executable and verify ELF
+        run: |
+          set -euo pipefail
+          (cd upstream && bash runtime/scripts/build-shadps4-arm64.sh) >p49/build.log 2>&1 || {
+            tail -180 p49/build.log >&2
+            echo 'P49_ARM64_GLIBC_BUILD_FAILED' >&2
+            exit 6
+          }
+          elf=upstream/runtime/build/shadps4-arm64-stage/bin/shadps4-arm64
+          test -s "$elf"
+          readelf -h "$elf" > p49/elf-header.txt
+          readelf -l "$elf" > p49/elf-program.txt
+          readelf -d "$elf" > p49/elf-dynamic.txt
+          grep -Eq 'Machine:[[:space:]]+AArch64' p49/elf-header.txt
+          grep -Eq 'Class:[[:space:]]+ELF64' p49/elf-header.txt
+          grep -Fq '/lib/ld-linux-aarch64.so.1' p49/elf-program.txt
+          grep -Fq 'Shared library: [libc.so.6]' p49/elf-dynamic.txt
+          ! grep -Fq 'Shared library: [liblog.so]' p49/elf-dynamic.txt
+          grep -aFq 'BACHATA/1 HELLO version=2 contract=' "$elf"
+          grep -aFq 'BACHATA_F43DEV_R2A2_HOST_GATE_OK' "$elf"
+          grep -aFq 'P45_BCN_PER_LAYER_VIEW_PROOF' "$elf"
+          sha256sum "$elf" > p49/ELF-SHA256.txt
+          cp "$elf" p49/shadps4-arm64-GLIBC-P49-PUBLIC-EXPERIMENTAL-NOT-APK
+          printf '%s\n' \
+            'source_pin=be6bc2e9c60799e071dd2fafa6216e8d80ec619c' \
+            'host_v2_source=COMBINED' 'p45_bcn_source=COMBINED' \
+            'target=Linux AArch64 GLIBC' 'original_p42_private_binary=NOT_REBUILT' \
+            'original_p42_signer_protocol=NOT_PROVEN' \
+            'host_android_broker=NOT_TESTED' 'outlast_fixed=NOT_VERIFIED' \
+            'apk_built=NO' > p49/PROVENANCE.txt
+      - name: Publish public experimental candidate and build evidence (not APK)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p49-unified-hostv2-bcn-glibc-public-core-NOT-APK
+          path: p49/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Publication disclosure
+        run: |
+          printf '%s\n' 'P49_PUBLIC_GLIBC_CORE=BUILT' 'P49_PRIVATE_P42_CORE_REBUILT=NO' \
+            'P49_SIGNED_APK=NO' 'P49_OUTLAST_FIXED=NOT_VERIFIED' \
+            'P49_F43DEV_BOOT=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
