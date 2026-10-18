@@ -1,0 +1,45 @@
+name: P63 unknown PSF format evidence (safe diagnostics, NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p63-psf-format-forensics]
+    paths:
+      - 'tools/bachata-p63/**'
+      - 'tools/bachata-p61/p61_saf_psf_stage.h'
+      - '.github/workflows/bachata-f43dev-p63-psf-evidence.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bounded-unknown-format-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin exact P62-derived telemetry header and patch
+        run: |
+          set -euo pipefail
+          echo '28c939c232d52f4b514100efa77b82200aa8507ee8420cf250096a5154297858  tools/bachata-p61/p61_saf_psf_stage.h' | sha256sum -c -
+          PYTHONPATH=tools/bachata-p63 python3 -m unittest -v tools/bachata-p63/test_patch_p63.py
+      - name: GCC and Clang ASAN/UBSAN C++20 strict tests
+        run: |
+          set -euo pipefail
+          mkdir -p p63-fixture/src/platform/bachata
+          cp tools/bachata-p61/p61_saf_psf_stage.h p63-fixture/src/platform/bachata/
+          cp tools/bachata-r2a5/saf_bsf1_client.h p63-fixture/src/platform/bachata/
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ip63-fixture/src tools/bachata-p63/test_p63.cpp -o p63-fixture/test
+          p63-fixture/test
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Ip63-fixture/src tools/bachata-p63/test_p63.cpp -o p63-fixture/test-asan
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 p63-fixture/test-asan
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -pthread \
+            -Ip63-fixture/src tools/bachata-p62/test_p62.cpp -o p63-fixture/p62-regression
+          p63-fixture/p62-regression
+          printf '%s\n' \
+            'P63_UNKNOWN_FORMAT_NUMERIC_EVIDENCE=PASS' \
+            'P63_RAW_TITLE_KEY_BYTES_LOGGED=NO' \
+            'P63_FORMAT_REJECTION_STILL_FAIL_CLOSED=YES' \
+            'P63_HOST_V2_SOCKET_UID_GATES=UNMODIFIED' \
+            'P63_P42_PANVK_F3=UNMODIFIED' \
+            'P63_ANDROID_OUTLAST=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
