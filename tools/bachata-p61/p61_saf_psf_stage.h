@@ -25,6 +25,10 @@ enum class Status {
     NotAttempted, UnsafeRoot, BrokerStatRejected, BrokerStatUnavailable,
     BrokerStatInvalid, BrokerNotRegular, BrokerOpenRejected, BrokerOpenFailed,
     InvalidFd, TooLarge, ReadFailed, InvalidPsf, MissingTitleId,
+    InvalidPsfMagic, UnsupportedPsfVersion, InvalidPsfLayout,
+    InvalidPsfEntryBounds, InvalidPsfKey, InvalidPsfFormat,
+    InvalidPsfText, DuplicateTitleId, InvalidTitleIdFormat,
+
     TitleIdMismatch, CreateDirectoryFailed, UnsafeDirectory, ExistingFile,
     CreateFileFailed, WriteFailed, Ready
 };
@@ -42,6 +46,16 @@ inline constexpr const char* Marker(Status s) noexcept {
     case Status::TooLarge: return "BACHATA_P61_PSF_TOO_LARGE";
     case Status::ReadFailed: return "BACHATA_P61_PSF_READ_FAILED";
     case Status::InvalidPsf: return "BACHATA_P61_PSF_INVALID";
+    case Status::InvalidPsfMagic: return "BACHATA_P62_PSF_BAD_MAGIC";
+    case Status::UnsupportedPsfVersion: return "BACHATA_P62_PSF_UNSUPPORTED_VERSION";
+    case Status::InvalidPsfLayout: return "BACHATA_P62_PSF_LAYOUT";
+    case Status::InvalidPsfEntryBounds: return "BACHATA_P62_PSF_ENTRY_BOUNDS";
+    case Status::InvalidPsfKey: return "BACHATA_P62_PSF_KEY";
+    case Status::InvalidPsfFormat: return "BACHATA_P62_PSF_FORMAT";
+    case Status::InvalidPsfText: return "BACHATA_P62_PSF_TEXT";
+    case Status::DuplicateTitleId: return "BACHATA_P62_PSF_DUPLICATE_TITLE_ID";
+    case Status::InvalidTitleIdFormat: return "BACHATA_P62_PSF_TITLE_ID_FORMAT";
+
     case Status::MissingTitleId: return "BACHATA_P61_PSF_TITLE_ID_MISSING";
     case Status::TitleIdMismatch: return "BACHATA_P61_PSF_TITLE_ID_MISMATCH";
     case Status::CreateDirectoryFailed: return "BACHATA_P61_PSF_CREATE_DIR_FAILED";
@@ -111,41 +125,56 @@ inline bool ValidTitle(std::string_view v) {
     if(v.size()!=9 || v.substr(0,4)!="CUSA") return false;
     return std::all_of(v.begin()+4,v.end(),[](char c){return c>='0'&&c<='9';});
 }
-// Validate every entry BEFORE passing the file to upstream PSF::Open,
-// which assumes all offsets and lengths are valid. Do not log PSF strings.
+// P62: PSFHeader uses BE magic, LE offsets; PSFRawEntry uses BE param_fmt
+// (upstream src/core/file_format/psf.h). A Text entry is the first NUL-
+// terminated string, not necessarily the full param_len field. Reject any
+// malformed entries *before* upstream PSF::Open reads pointer-based values.
+// Only status categories are logged; never log game strings or SAF tokens.
 inline Status ValidatePsf(std::span<const unsigned char> b,std::string_view expected) {
-    if(!ValidTitle(expected) || b.size()<20 || b[0]!=0 || b[1]!='P' ||
-       b[2]!='S' || b[3]!='F') return Status::InvalidPsf;
+    if(!ValidTitle(expected)) return Status::InvalidTitleIdFormat;
+    if(b.size()<20 || b[0]!=0 || b[1]!='P' || b[2]!='S' || b[3]!='F')
+        return Status::InvalidPsfMagic;
     const auto ver=Le32(b.data()+4);
-    if(ver!=0x100 && ver!=0x101) return Status::InvalidPsf;
-    const auto keys=Le32(b.data()+8),data=Le32(b.data()+12),count=Le32(b.data()+16);
-    if(count==0 || count>512 || keys<20+count*16 || keys>data || data>b.size())
-        return Status::InvalidPsf;
+    if(ver!=0x100 && ver!=0x101) return Status::UnsupportedPsfVersion;
+    const std::size_t keys=Le32(b.data()+8);
+    const std::size_t data=Le32(b.data()+12);
+    const std::size_t count=Le32(b.data()+16);
+    if(count==0 || count>512 || count>(b.size()-20)/16 ||
+       keys<20+count*16 || keys>data || data>b.size())
+        return Status::InvalidPsfLayout;
     bool found=false;
-    for(std::uint32_t i=0;i<count;++i) {
+    for(std::size_t i=0;i<count;++i) {
         const auto* e=b.data()+20+i*16;
-        const auto key_off=Le16(e);
+        const auto key_off=std::size_t(Le16(e));
         const auto fmt=(std::uint16_t(e[2])<<8) | e[3];
-        const auto len=Le32(e+4),max=Le32(e+8),off=Le32(e+12);
-        const auto key_size=data-keys;
-        if(key_off>=key_size || len>max || off>b.size()-data ||
-           len>b.size()-data-off) return Status::InvalidPsf;
+        const auto len=std::size_t(Le32(e+4));
+        const auto max=std::size_t(Le32(e+8));
+        const auto off=std::size_t(Le32(e+12));
+        if(key_off>=data-keys || len>max || off>b.size()-data ||
+           len>b.size()-data-off) return Status::InvalidPsfEntryBounds;
         const auto* begin=b.data()+keys+key_off;
         const auto* end=static_cast<const unsigned char*>(
-            std::memchr(begin,0,key_size-key_off));
-        if(!end || end==begin || (end-begin)>128) return Status::InvalidPsf;
+            std::memchr(begin,0,data-keys-key_off));
+        if(!end || end==begin || (end-begin)>128) return Status::InvalidPsfKey;
+        const auto key=std::string_view(reinterpret_cast<const char*>(begin),end-begin);
+        const auto* value=b.data()+data+off;
+        const unsigned char* zero=nullptr;
         if(fmt==0x0204) {
-            if(len==0 || b[data+off+len-1]!=0 ||
-               !std::memchr(b.data()+data+off,0,len)) return Status::InvalidPsf;
+            if(len==0) return Status::InvalidPsfText;
+            zero=static_cast<const unsigned char*>(std::memchr(value,0,len));
+            if(!zero) return Status::InvalidPsfText;
         } else if(fmt==0x0404) {
-            if(len!=4) return Status::InvalidPsf;
-        } else if(fmt!=0x0004) return Status::InvalidPsf;
-        if(std::string_view(reinterpret_cast<const char*>(begin),end-begin)=="TITLE_ID") {
-            if(found || fmt!=0x0204) return Status::InvalidPsf;
+            if(len!=4) return Status::InvalidPsfEntryBounds;
+        } else if(fmt!=0x0004) return Status::InvalidPsfFormat;
+        if(key=="TITLE_ID") {
+            if(found) return Status::DuplicateTitleId;
+            if(fmt!=0x0204) return Status::InvalidTitleIdFormat;
             found=true;
-            const auto* value=b.data()+data+off;
-            const auto actual=std::string_view(reinterpret_cast<const char*>(value),len-1);
-            if(!ValidTitle(actual)) return Status::InvalidPsf;
+            // An actual PSF can store a padded text slot; shadPS4::PSF::Open
+            // reads C string until the FIRST NUL. Never compare extra padding.
+            const auto actual=std::string_view(
+                reinterpret_cast<const char*>(value),zero-value);
+            if(!ValidTitle(actual)) return Status::InvalidTitleIdFormat;
             if(actual!=expected) return Status::TitleIdMismatch;
         }
     }
