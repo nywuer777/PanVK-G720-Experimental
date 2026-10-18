@@ -1,0 +1,40 @@
+name: P47 F43DEV private-source recovery audit (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p47-private-source-recovery]
+    paths:
+      - 'tools/bachata-p47/**'
+      - '.github/workflows/bachata-f43dev-p47-source-recovery.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-recovery-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source-recovery negative and synthetic tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p47 python3 -m unittest discover -s tools/bachata-p47 -p 'test_*.py' -v
+          python3 -m py_compile tools/bachata-p47/source_recovery_gate.py
+      - name: Fail-closed demonstration - no private F43DEV source
+        run: |
+          set -euo pipefail
+          set +e
+          python3 tools/bachata-p47/source_recovery_gate.py --report p47-blocked.json
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          grep -Fq '"status": "BLOCKED_PRIVATE_SOURCE_UNAVAILABLE"' p47-blocked.json
+          grep -Fq '"apk_built": false' p47-blocked.json
+      - name: Cross-check P46 unchanged source kit
+        run: |
+          set -euo pipefail
+          echo '676ec08289ad8c0dccc1985054b2e7a294b6cb07a493e6da7bf80b9e6b3ddadf  tools/bachata-p46/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit && tar -xJf tools/bachata-p46/source-kit.tar.xz -C kit
+          (cd kit && python3 -m unittest -v test_p46_portable.py)
+      - name: P47 is NOT a private build, Outlast fix or APK
+        run: |
+          printf '%s\n' 'P47_RECOVERY_GATE_TESTS=YES' 'P47_PRIVATE_SOURCE_RECOVERED=NO' 'P47_PRIVATE_ELF_REBUILT=NO' 'P47_OUTLAST_FIXED=NO' 'P47_APK_BUILT=NO' >> "$GITHUB_STEP_SUMMARY"
