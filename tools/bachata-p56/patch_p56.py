@@ -30,7 +30,7 @@ def patch(header:str,client:str,bridge:str)->tuple[str,str,str]:
                     bool allow_fd, bool payload_stage) {"""
     client=one(client,old,new,"R2A5 receiver signature")
     start=client.index(new)
-    end=client.index("\\n} // namespace",start)
+    end=client.index("\n} // namespace",start)
     body=client[start:end]
     body=one(body,
         """        if (n < 0 && errno == EINTR) continue;
@@ -42,8 +42,8 @@ def patch(header:str,client:str,bridge:str)->tuple[str,str,str]:
     body=one(body,"        if (unexpected) return false;",
         "        if (unexpected) return payload_stage ? Error::PayloadAncillary : Error::HeaderAncillary;",
         "ancillary error")
-    body=one(body,"    return true;\\n}",
-        "    return Error::None;\\n}","receive success")
+    body=one(body,"    return true;\n}",
+        "    return Error::None;\n}","receive success")
     client=client[:start]+body+client[end:]
 
     client=one(client,
