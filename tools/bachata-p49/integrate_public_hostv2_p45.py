@@ -84,6 +84,30 @@ def integrate(repo: Path, source: Path, kit_source: Path, result_path: Path) -> 
         if not (repo / rel).is_file():
             raise RuntimeError(f"HOST_SOURCE_PATCH_MISSING: {rel}")
 
+    # P45 must be generated against a clean, exact-PIN checkout. Keeping the
+    # public reference independent prevents weakening P45's clean-tree guard.
+    # Never use --3way/-C/reject or skip context validation when rebasing.
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    p45_clean = source.parent / "p49-p45-clean"
+    if p45_clean.exists():
+        raise RuntimeError("P45_CLEAN_SANDBOX_ALREADY_EXISTS")
+    run(["git", "clone", "--local", "--no-hardlinks", str(source), str(p45_clean)], repo)
+    clean_head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=p45_clean, text=True).strip()
+    if clean_head != PIN:
+        raise RuntimeError("P45_CLEAN_SOURCE_PIN_DRIFT")
+    run(["python3", str(kit_source / "port_renderer_p45.py"),
+         "--source-root", str(p45_clean), "--out",
+         str(result_path.parent / "p49-p45-reference.diff"), "--write"], repo)
+    run(["git", "diff", "--check"], p45_clean)
+    # New source files are included as intent-to-add, without a fake commit.
+    run(["git", "add", "-N", "."], p45_clean)
+    patch = subprocess.check_output(["git", "diff", "--binary", "--no-ext-diff"],
+                                    cwd=p45_clean)
+    require_patch = result_path.parent / "p49-clean-p45.patch"
+    if not patch or len(patch) > 8_000_000:
+        raise RuntimeError("P45_PATCH_EMPTY_OR_TOO_LARGE")
+    require_patch.write_bytes(patch)
+
     # Preexisting host trust checks must remain; compilation alone does not prove
     # equivalence to the P42 APK.
     for relative, extra in CHAIN:
@@ -92,10 +116,11 @@ def integrate(repo: Path, source: Path, kit_source: Path, result_path: Path) -> 
             args.append(str(repo / item) if item.startswith("tools/") else item)
         run(args, repo)
 
-    # Fail closed if the public P45 port cannot be rebased atop the host patch
-    # chain without loss of either feature. Never force git apply -3 / ignore.
-    run(["python3", str(kit_source / "port_renderer_p45.py"),
-         "--source-root", str(source), "--out", str(result_path.parent / "p49-p45.diff"), "--write"], repo)
+    # A clean P45-generated patch may only be applied if every original hunk
+    # matches the R2A6P5-modified checkout; incompatible hunks fail closed.
+    run(["git", "apply", "--check", "--whitespace=error",
+         str(require_patch)], source)
+    run(["git", "apply", "--whitespace=error", str(require_patch)], source)
     run(["git", "diff", "--check"], source)
     result = verify_markers(source)
     result["source_pin"] = PIN
