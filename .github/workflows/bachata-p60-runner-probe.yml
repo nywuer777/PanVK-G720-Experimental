@@ -1,0 +1,18 @@
+name: P60 GitHub runner startup probe (NO code, NO APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p60-libc-saf-preflight]
+    paths:
+      - '.github/workflows/bachata-p60-runner-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runner-startup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Prove runner executed a shell command
+        run: |
+          echo P60_RUNNER_EXECUTED_STEP=YES
+          echo P60_BUILD_OR_TEST_EXECUTED=NO
