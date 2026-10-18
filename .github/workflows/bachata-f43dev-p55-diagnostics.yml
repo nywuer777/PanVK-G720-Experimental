@@ -1,0 +1,36 @@
+name: P55 SAF BSF1 error disambiguation (mock only, NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p55-bsf1-error-disambiguation]
+    paths:
+      - 'tools/bachata-p55/**'
+      - 'tools/bachata-p54/p54_bsf1_eboot.h'
+      - '.github/workflows/bachata-f43dev-p55-diagnostics.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  safe-error-codes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run P55 pure error mapping test with C++20 and sanitizers
+        run: |
+          set -euo pipefail
+          mkdir -p p55-src/platform/bachata
+          cp tools/bachata-r2a5/saf_bsf1_client.h tools/bachata-r2a5/saf_bsf1_client.cpp \
+             tools/bachata-p54/p54_bsf1_eboot.h p55-src/platform/bachata/
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pthread \
+             -Ip55-src tools/bachata-p55/test_bsf1_error_markers.cpp \
+             p55-src/platform/bachata/saf_bsf1_client.cpp -o /tmp/p55-error-mapping
+          /tmp/p55-error-mapping
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pthread \
+             -fsanitize=address,undefined -fno-omit-frame-pointer \
+             -Ip55-src tools/bachata-p55/test_bsf1_error_markers.cpp \
+             p55-src/platform/bachata/saf_bsf1_client.cpp -o /tmp/p55-error-mapping-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p55-error-mapping-sanitized
+          echo 'P55_SUBERROR_MAPPING=PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P55_ANDROID_BROKER=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P55_APK=NOT_BUILT' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P55_P42_P54_ELFS=UNCHANGED' >> "$GITHUB_STEP_SUMMARY"
