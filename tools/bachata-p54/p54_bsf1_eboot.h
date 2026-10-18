@@ -19,6 +19,9 @@ enum class Outcome {
     BrokerUnavailable,
     BrokerDenied,
     BrokerProtocolMismatch,
+    BrokerRequestSendFailed,
+    BrokerResponseFrameInvalid,
+    BrokerResponsePayloadInvalid,
     BrokerFdInvalid,
     EbootFdReady,
 };
@@ -42,6 +45,12 @@ inline constexpr const char* Marker(Outcome status) {
         return "BACHATA_P54_BSF1_EBOOT_BROKER_DENIED";
     case Outcome::BrokerProtocolMismatch:
         return "BACHATA_P54_BSF1_EBOOT_BROKER_PROTOCOL_MISMATCH";
+    case Outcome::BrokerRequestSendFailed:
+        return "BACHATA_P55_BSF1_EBOOT_REQUEST_SEND_FAILED";
+    case Outcome::BrokerResponseFrameInvalid:
+        return "BACHATA_P55_BSF1_EBOOT_RESPONSE_FRAME_INVALID";
+    case Outcome::BrokerResponsePayloadInvalid:
+        return "BACHATA_P55_BSF1_EBOOT_RESPONSE_PAYLOAD_INVALID";
     case Outcome::BrokerFdInvalid:
         return "BACHATA_P54_BSF1_EBOOT_FD_INVALID";
     case Outcome::EbootFdReady:
@@ -62,6 +71,12 @@ inline Outcome Classify(BSF1::Error code) {
     case BSF1::Error::MissingFd:
     case BSF1::Error::UnexpectedFd:
         return Outcome::BrokerFdInvalid;
+    case BSF1::Error::Io:
+        return Outcome::BrokerRequestSendFailed;
+    case BSF1::Error::InvalidFrame:
+        return Outcome::BrokerResponseFrameInvalid;
+    case BSF1::Error::PayloadInvalid:
+        return Outcome::BrokerResponsePayloadInvalid;
     default:
         return Outcome::BrokerProtocolMismatch;
     }
