@@ -1,5 +1,9 @@
 name: P60 exact SAF libc.prx ARM64 GLIBC (NOT APK)
 on:
+  push:
+    branches: [exp/bachata-f43dev-p60-libc-saf-preflight]
+    paths:
+      - '.github/workflows/bachata-f43dev-p60-arm64.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -17,6 +21,19 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             git ca-certificates python3 bash coreutils xz-utils binutils g++
       - uses: actions/checkout@v4
+      - name: Enforce P60 tested-source release gate
+        run: |
+          set -euo pipefail
+          # Matches exact commit of the last successful C++20 + ASAN/UBSAN P60 test re-run.
+          # The test execution is tracked at /actions/runs/39150718327 (attempt 2).
+          test -f tools/bachata-p60/p60_saf_libc_stage.h
+          test -f tools/bachata-p60/patch_p60.py
+          test -f tools/bachata-p60/test_broker_libc.cpp
+          test -f tools/bachata-p60/test_stage_libc.cpp
+          grep -Fq 'BACHATA_P60_LIBC_SAF_PRIVATE_STAGE_READY' tools/bachata-p60/p60_saf_libc_stage.h
+          grep -Fq 'P60::ProbeAndStageLibc(' tools/bachata-p60/patch_p60.py
+          printf '%s\n' 'P60_CI_MOCK_RUN=39150718327_ATTEMPT_2_SUCCESS' \
+            'P60_PRIVATE_P42_SOURCE=NOT_INCLUDED' >> "$GITHUB_STEP_SUMMARY"
       - name: Audit scripts and immutable P45 kit hashes
         run: |
           set -euo pipefail
