@@ -13,7 +13,7 @@ SAMPLE = '\n'.join([
 class TestSource(unittest.TestCase):
     def test_good_patch(self):
         data = patched(SAMPLE)
-        self.assertIn('BACHATA_P54_BSF1_EBOOT_', data)
+        self.assertIn('Marker(p54_probe.outcome)', data)
         self.assertIn('p54_eboot_fd.emplace(std::move(p54_probe.fd))', data)
         self.assertIn('TryOpenInitialEboot(', data)
         self.assertIn('std::filesystem::exists(ebootPath)', data)
