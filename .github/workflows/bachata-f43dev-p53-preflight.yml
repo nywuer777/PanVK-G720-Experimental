@@ -1,0 +1,29 @@
+name: P53 minimal entrypoint resolver regressions (no APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p53-relative-eboot]
+    paths:
+      - '.github/workflows/bachata-f43dev-p53-preflight.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  p53-header-and-patch-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run strict P53 patch regressions and compile standalone header
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p53 python3 -m unittest discover -s tools/bachata-p53 -p 'test_*.py' -v
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -Itools/bachata-p53 \
+            tools/bachata-p53/test_relative_eboot.cpp -o /tmp/p53-test-entry
+          /tmp/p53-test-entry
+          g++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Itools/bachata-p53 tools/bachata-p53/test_relative_eboot.cpp \
+            -o /tmp/p53-test-entry-sanitized
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p53-test-entry-sanitized
+          printf '%s\n' 'P53_UNIT_TESTS=PASS' 'P53_SANITIZERS=PASS' \
+            'P53_ANDROID_GAME_BOOT=NOT_PROVEN' >> "$GITHUB_STEP_SUMMARY"
