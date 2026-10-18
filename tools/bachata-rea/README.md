@@ -28,6 +28,43 @@ providers in a controlled development environment after reviewing origin,
 dependencies, and permissions. `rea setup` changes agent configurations: do
 not run it automatically in CI.
 
+## Reproducible isolated REA/JADX provisioning
+
+The exact REA 6.6.0 release is published at official GitHub tag
+`morluto/rea@rea-agents-6.6.0` commit
+`2c4338db1fdb7773e05376301c558cff2a0b4b80`.
+During provisioning on 2026-10-18, npm reported
+`ETARGET: No matching version found for rea-agents@6.6.0`.
+The setup script deliberately **builds the pinned official GitHub source**;
+do not silently fall back to an unpinned latest npm package.
+
+`tools/bachata-rea/setup_dev_environment.sh` performs an isolated
+installation with an explicit `BACHATA_REA_HOME`, requires Node.js 22.19+
+(or 24.11+/26+) and a full JDK, builds REA's compiled CLI, downloads
+the REA-pinned JADX engine `jadx-headless-mcp-0.7.1-all.jar` and
+verifies SHA-256
+`6e5eacf500b64292bfb73c49797c1958f6ee44646e43e868039ae7feb573ff75`.
+It then runs the actual scoped `rea doctor --provider jadx --json` check.
+The resulting `activate.sh` is scoped to the chosen tool directory and
+does **not** edit ChatGPT/Claude/Codex/GitHub agent registrations.
+
+Example on an online Linux development host:
+
+```bash
+export BACHATA_REA_HOME="$HOME/.local/share/bachata-rea-660"
+bash tools/bachata-rea/setup_dev_environment.sh
+source "$BACHATA_REA_HOME/activate.sh"
+rea doctor --provider jadx --json
+# For native analysis, install the separately version-matched Ghidra,
+# export GHIDRA_INSTALL_DIR, then check its provider independently.
+rea doctor --provider ghidra --json
+```
+
+The CI workflow
+`.github/workflows/bachata-rea-node-jadx-readiness.yml`
+tests this setup on GitHub's Linux runner using Node 22.19.0 and JDK 21.
+CI may publish only sanitized readiness; never private APK/core bytes.
+
 ## Useful research tasks
 
 1. Investigate the **Android host** JNI `NativeRuntimeBridge.run`, the two
