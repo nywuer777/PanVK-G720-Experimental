@@ -1,0 +1,59 @@
+name: P61.1 LAB app-private trust binding (EXACT, NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p61-psf-saf]
+    paths:
+      - 'tools/bachata-p61/verified_lab_package_rebind.py'
+      - 'tools/bachata-p61/test_lab_package_rebind.py'
+      - '.github/workflows/bachata-f43dev-p61lab-identity.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verified-lab-root-binding:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject mismatched, missing, multiple, and bypassed trust anchors
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p61 python3 -m unittest -v tools/bachata-p61/test_lab_package_rebind.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: p61-saf-psf-stage-glibc-core-NOT-APK
+          run-id: 39160761037
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: public-p61
+      - name: Byte-exact public P61 to LAB-ONLY f43lab trusted root
+        run: |
+          set -euo pipefail
+          src=public-p61/shadps4-arm64-GLIBC-P61-PSF-SAF-EXACT-STAGE-NOT-APK
+          test -f "$src"
+          test "$(sha256sum "$src" | cut -d ' ' -f1)" = 80cd281bf314e12b8e0be936bcc62bf1613ceb98fbc24f7881f280819950c234
+          python3 tools/bachata-p61/verified_lab_package_rebind.py \
+            --input "$src" \
+            --output P61.1-LAB-F43LAB-ROOT-BOUND-GLIBC-NOT-APK \
+            --report P61.1-LAB-BINDING-AUDIT.json
+          test "$(sha256sum P61.1-LAB-F43LAB-ROOT-BOUND-GLIBC-NOT-APK | cut -d ' ' -f1)" = 428cbbff995caacded39d0bc15ae15c3db2b65aea89578c0e72fac8663bf37eb
+          python3 - <<'PY'
+          import json
+          d=json.load(open("P61.1-LAB-BINDING-AUDIT.json"))
+          assert d['changed_byte_offsets']==[41065198,41065199,41065200]
+          assert d['lab_package']=='com.bachatas4.android.f43lab'
+          assert d['root_socket_uid_and_peer_auth']=='PRESERVED_NO_GATE_BYPASS'
+          PY
+          echo 'P61.1_PUBLIC_CORE_PIN=PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P61.1_EXACT_3_BYTE_LAB_BIND=PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P61.1_PRIVATE_P42=UNMODIFIED' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P61.1_APK_SIGNING=NOT_IN_THIS_WORKFLOW' >> "$GITHUB_STEP_SUMMARY"
+          echo 'P61.1_ANDROID_DEVICE=NOT_TESTED' >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p61-1-lab-f43lab-root-bound-glibc-NOT-APK
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            P61.1-LAB-F43LAB-ROOT-BOUND-GLIBC-NOT-APK
+            P61.1-LAB-BINDING-AUDIT.json
