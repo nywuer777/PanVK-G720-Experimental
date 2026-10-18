@@ -1,0 +1,60 @@
+name: Bachata Mali REA native AArch64 Ghidra 12.1.4 provider readiness
+on:
+  push:
+    branches: [exp/bachata-mali-rea-6-6-0-devtools]
+    paths:
+      - 'tools/bachata-rea/setup_ghidra_provider.sh'
+      - '.github/workflows/bachata-rea-ghidra-readiness.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  ghidra-official-release-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install pinned official REA source and official JADX fixture provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BACHATA_REA_HOME="$RUNNER_TEMP/bachata-rea-660"
+          bash tools/bachata-rea/setup_dev_environment.sh
+      - name: Install official Ghidra 12.1.4 with SHA-256 and verify REA provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BACHATA_REA_HOME="$RUNNER_TEMP/bachata-rea-660"
+          bash tools/bachata-rea/setup_ghidra_provider.sh
+          test -s "$BACHATA_REA_HOME/doctor-ghidra.json"
+          test -s "$BACHATA_REA_HOME/doctor-jadx.json"
+          printf '%s\n' 'REA_RELEASE=6.6.0_GITHUB_TAG_PINNED' \
+            'REA_NATIVE_GHIDRA=12.1.4' \
+            'REA_OFFICIAL_GHIDRA_ZIP_SHA256=VERIFIED' \
+            'REA_GHIDRA_DOCTOR=PASS' 'REA_JADX_DOCTOR=PASS' \
+            'REA_ANDROID_APK_INSPECTED=NO' \
+            'REA_BACHATA_PRIVATE_ELF_INSPECTED=NO' \
+            'REA_CHATGPT_MCP_CONNECTED=NO' \
+            'P42_P53_AND_PANVK=UNMODIFIED' > rea-native-ready.txt
+          sha256sum rea-native-ready.txt > rea-native-ready.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bachata-mali-rea660-ghidra-native-provider-ready-NOT-APK
+          path: |
+            rea-native-ready.txt
+            rea-native-ready.sha256
+          retention-days: 14
+      - name: Scope note
+        if: success()
+        run: |
+          printf '%s\n' \
+            'REA_NATIVE_GHIDRA_AND_ANDROID_JADX_PROVIDERS_CONFIGURED_IN_EPHEMERAL_CI=PASS' \
+            'NO_PRIVATE_BACHATA_APK_OR_ELF_UPLOADED' \
+            'NO_P42_P53_OR_PANVK_MODIFICATION' >> "$GITHUB_STEP_SUMMARY"
