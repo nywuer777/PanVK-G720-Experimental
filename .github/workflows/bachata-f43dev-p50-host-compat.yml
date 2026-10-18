@@ -1,0 +1,121 @@
+name: P50 Actual P49 ELF ABI and QEMU host rejection (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p50-guest-host-compat]
+    paths: ['tools/bachata-p50/**', '.github/workflows/bachata-f43dev-p50-host-compat.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  actual-p49-abi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Synthetic test of fail-closed parser
+        run: |
+          set -euo pipefail
+          PYTHONPATH=tools/bachata-p50 python3 -m unittest discover -s tools/bachata-p50 -p 'test_*.py' -v
+      - name: Download the actual successful P49 binary
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 39089770038
+          github-token: ${'$'}{{ secrets.GITHUB_TOKEN }}
+          name: p49-unified-hostv2-bcn-glibc-public-core-NOT-APK
+          path: p50-input
+      - name: Full ELF ABI audit with hardcoded build hash
+        run: |
+          set -euo pipefail
+          mkdir -p p50-report
+          python3 tools/bachata-p50/audit_p49_guest_abi.py \
+            --elf p50-input/shadps4-arm64-GLIBC-P49-PUBLIC-EXPERIMENTAL-NOT-APK \
+            --gate tools/bachata-r2a2/f43dev_identity_gate.h \
+            --out p50-report/P50-REAL-ELF-ABI.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path("p50-report/P50-REAL-ELF-ABI.json").read_text())
+          assert d["status"]=="PUBLIC_ELF_ABI_VERIFIED_PRIVATE_HOST_COMPATIBILITY_BLOCKED"
+          assert d["max_glibc_symbol"]=="GLIBC_2.38"
+          assert d["max_glibcxx_symbol"]=="GLIBCXX_3.4.32"
+          assert not d["private_host_accepts_candidate"]
+          assert not d["private_p42_apk_signer_verified"]
+          assert not d["real_android_broker_authenticated"]
+          assert not d["apk_created"]
+          PY
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p50-actual-p49-elf-abi-audit-NOT-APK
+          path: p50-report/
+          retention-days: 14
+          if-no-files-found: warn
+  qemu-negative-real-guest:
+    needs: actual-p49-abi
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reuse the same approved original P49 ELF
+        uses: actions/download-artifact@v4
+        with:
+          run-id: 39089770038
+          github-token: ${'$'}{{ secrets.GITHUB_TOKEN }}
+          name: p49-unified-hostv2-bcn-glibc-public-core-NOT-APK
+          path: p50-input
+      - name: QEMU and AArch64 GLIBC user-mode libraries
+        run: |
+          set -euo pipefail
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            qemu-user libc6:arm64 libstdc++6:arm64 libudev1:arm64 libuuid1:arm64 libgcc-s1:arm64
+      - name: Execute native guest, reject invalid nonce and absent managed host
+        run: |
+          set -euo pipefail
+          mkdir -p p50-smoke
+          ELF=p50-input/shadps4-arm64-GLIBC-P49-PUBLIC-EXPERIMENTAL-NOT-APK
+          echo '272024fe15b7785be819f7fe3eb403c0543b070da2a6525d10580e24876dadaa  p50-input/shadps4-arm64-GLIBC-P49-PUBLIC-EXPERIMENTAL-NOT-APK' | sha256sum -c -
+          chmod u+x "$ELF"
+          set +e
+          timeout 40s qemu-aarch64 -L / "$ELF" --bachata-contract INVALID_NONCE \
+            --bachata-saf-socket p50-test --bachata-saf-token 0123456789abcdef0123456789abcdef \
+            >p50-smoke/a.out 2>p50-smoke/a.err
+          a=$?
+          set -e
+          if [ "$a" -ne 1 ] || ! grep -Fq 'F43DEV host V2 contract syntax rejected' p50-smoke/a.err; then
+            sed -n '1,25p' p50-smoke/a.err >&2
+            echo "P50_QEMU_INVALID_NONCE_REJECTION_FAILED" >&2
+            exit 12
+          fi
+          set +e
+          timeout 40s qemu-aarch64 -L / "$ELF" --bachata-contract 0123456789abcdef0123456789abcdef \
+            --bachata-saf-socket p50-test --bachata-saf-token 0123456789abcdef0123456789abcdef \
+            >p50-smoke/b.out 2>p50-smoke/b.err
+          b=$?
+          set -e
+          if [ "$b" -ne 1 ] || ! grep -Fq 'F43DEV host gate: untrusted app-private root or socket' p50-smoke/b.err; then
+            sed -n '1,25p' p50-smoke/b.err >&2
+            echo "P50_QEMU_MISSING_HOST_REJECTION_FAILED" >&2
+            exit 13
+          fi
+          # Do not upload raw process argv/output; just verified decisions.
+          printf '%s\n' 'REAL_P49_ELF_QEMU_ARM64_STARTED=YES' \
+            'INVALID_V2_NONCE_REJECTED=YES' 'ABSENT_MANAGED_HOST_REJECTED=YES' \
+            'ANDROID_SIGNER_TESTED=NO' 'REAL_BROKER_TESTED=NO' \
+            'OUTLAST_TESTED=NO' 'APK_CREATED=NO' > p50-smoke/P50-NEGATIVE-HOST-SMOKE.txt
+          rm -f p50-smoke/a.out p50-smoke/a.err p50-smoke/b.out p50-smoke/b.err
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: p50-real-guest-qemu-fail-closed-NOT-ANDROID-NOT-APK
+          path: p50-smoke/P50-NEGATIVE-HOST-SMOKE.txt
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Record release no-go
+        run: |
+          printf '%s\n' 'P50_PUBLIC_GUEST_QEMU_NEGATIVE_SMOKE=PASS' \
+            'P50_ANDROID_HOST_COMPATIBILITY=NOT_PROVEN' \
+            'P50_P42_SIGNED_APK=UNCHANGED' \
+            'P50_OUTLAST_FIXED=NOT_VERIFIED' >> "$GITHUB_STEP_SUMMARY"
