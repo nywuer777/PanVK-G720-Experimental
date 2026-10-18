@@ -1,0 +1,40 @@
+name: P46 private F43DEV GLIBC source provenance gate (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p46-private-glibc-provenance-gate]
+    paths:
+      - 'tools/bachata-p46/**'
+      - '.github/workflows/bachata-f43dev-p46-provenance.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-and-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run fail-closed ELF64 identity and false-positive tests
+        run: |
+          set -euo pipefail
+          cd tools/bachata-p46
+          python3 -m py_compile p46_private_glibc_gate.py test_p46.py
+          python3 -m unittest -v test_p46.py
+      - name: Compile real Outlast-diagnostic BC3 sRGB contract fixture with GCC
+        run: |
+          set -euo pipefail
+          cd tools/bachata-p46
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. test_p46_outlast.cpp -o /tmp/p46-outlast
+          /tmp/p46-outlast
+      - name: Compile BC3 sRGB 11-mip fixture with Clang ASan UBSan
+        run: |
+          set -euo pipefail
+          cd tools/bachata-p46
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -I. test_p46_outlast.cpp -o /tmp/p46-outlast-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p46-outlast-san
+      - name: Publish strict release limitations
+        run: |
+          echo 'P46_SOURCE_GATE=PASS' >> "$GITHUB_STEP_SUMMARY"
+          echo 'F43DEV_PRIVATE_GLIBC_PATCHED=NO' >> "$GITHUB_STEP_SUMMARY"
+          echo 'F43DEV_APK_BUILT=NO' >> "$GITHUB_STEP_SUMMARY"
+          echo 'OUTLAST_FIXED=NO' >> "$GITHUB_STEP_SUMMARY"
