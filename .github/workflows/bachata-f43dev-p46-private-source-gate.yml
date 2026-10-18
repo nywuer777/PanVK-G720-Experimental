@@ -1,0 +1,47 @@
+name: P46 F43DEV PRIVATE core BCn source-readiness gate (NOT APK)
+on:
+  push:
+    branches: [exp/bachata-f43dev-p46-private-core-port-gate]
+    paths:
+      - 'tools/bachata-p46/**'
+      - '.github/workflows/bachata-f43dev-p46-private-source-gate.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify exact source-only kit hash
+        run: |
+          set -euo pipefail
+          echo '676ec08289ad8c0dccc1985054b2e7a294b6cb07a493e6da7bf80b9e6b3ddadf  tools/bachata-p46/source-kit.tar.xz' | sha256sum -c -
+          mkdir -p kit
+          tar -xJf tools/bachata-p46/source-kit.tar.xz -C kit
+      - name: Verify fail-closed source readiness checks
+        run: |
+          set -euo pipefail
+          cd kit
+          python3 -m unittest -v test_p46_portable.py
+          python3 -m py_compile p46_private_elf_gate.py
+          grep -Fq 'BLOCKED_PRIVATE_GLIBC_BCN_PATCH_NOT_VERIFIED' p46_private_elf_gate.py
+          grep -Fq 'EXPECTED_P42_PRIVATE_TEXT_SHA256' p46_private_elf_gate.py
+          grep -Fq 'known_public_P31_substitution_detected' p46_private_elf_gate.py
+      - name: BC3 sRGB 1024x1024 11-mip test (GCC)
+        run: |
+          set -euo pipefail
+          cd kit
+          g++ -std=c++20 -O2 -Wall -Wextra -Werror -pedantic -I. p46_test_outlast_view.cpp -o /tmp/p46-view
+          /tmp/p46-view
+      - name: BCn view policy sanitizers (Clang ASan UBSan)
+        run: |
+          set -euo pipefail
+          cd kit
+          clang++ -std=c++20 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined -fno-omit-frame-pointer -I. p46_test_outlast_view.cpp -o /tmp/p46-view-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 /tmp/p46-view-san
+      - name: Publication is NOT an APK or a private core build
+        run: |
+          set -euo pipefail
+          printf '%s\n' 'P46_PRIVATE_SOURCE_GATE_TESTED=YES' 'P46_PRIVATE_ELF_REBUILT=NO' 'P46_OUTLAST_FIXED=NO' 'P46_APK_BUILT=NO' >> "$GITHUB_STEP_SUMMARY"
