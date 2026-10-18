@@ -62,3 +62,24 @@ jobs:
             'P58_P42_PRIVATE_APK=NOT_MODIFIED' \
             'P58_PANVK_BCN=UNCHANGED' \
             'P58_HOST_UID_AND_TOKEN_GATES=RETAINED' >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish reproducible P58 public patch and mock-test evidence
+        run: |
+          set -euo pipefail
+          mkdir -p p58-source-evidence
+          cp tools/bachata-p58/patch_p58.py tools/bachata-p58/test_patch.py \
+             tools/bachata-p58/test_android_bsf1_wire.cpp \
+             tools/bachata-p58/README.md p58-source-evidence/
+          printf '%s\n' \
+            'P58_ANDROID_BSF1_EXPECTED_HEADER=42 53 46 31 01 03 00 20 00 00 00 09' \
+            'P58_LEGACY_PUBLIC_REQUEST_LENGTH=55' \
+            'P58_CORRECTED_REQUEST_LENGTH=53' \
+            'P58_ANDROID_BROKER_ON_DEVICE=NOT_YET_TESTED' \
+            'P58_P42_PRIVATE_DEX_ELF_APK=NOT_INCLUDED' > p58-source-evidence/P58-SCOPE.txt
+          (cd p58-source-evidence && sha256sum patch_p58.py test_patch.py \
+             test_android_bsf1_wire.cpp README.md P58-SCOPE.txt > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p58-android-bsf1-corrected-framing-source-evidence-NOT-APK
+          path: p58-source-evidence/
+          retention-days: 14
+
